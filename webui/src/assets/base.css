@@ -1,0 +1,67 @@
+ /* Custom color palette */
+:root {
+  --primary-color: #007bff;
+  --secondary-color: #6c757d;
+  --success-color: #28a745;
+  --danger-color: #dc3545;
+  --warning-color: #ffc107;
+  --info-color: #17a2b8;
+  --light-color: #f8f9fa;
+  --dark-color: #343a40;
+  --white-color: #ffffff;
+  --black-color: #000000;
+
+  --text-color-dark: #333;
+  --text-color-light: #f8f8f8;
+  --background-color-light: #ffffff;
+  --background-color-dark: #2c3e50; /* Darker background for dark mode */
+
+  --border-color: #dee2e6;
+  --border-radius: 5px;
+  --box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+}
+
+/* Global styles */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-weight: normal;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--text-color-dark);
+  background: var(--background-color-light);
+  line-height: 1.6;
+  font-family: 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  font-size: 16px;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Dark mode styles */
+.dark {
+  color: var(--text-color-light);
+  background: var(--background-color-dark);
+  --border-color: rgba(255, 255, 255, 0.2);
+}
+
+.dark body {
+  color: var(--text-color-light);
+  background: var(--background-color-dark);
+}
+
+/* Light mode styles */
+.light {
+  color: var(--text-color-dark);
+  background: var(--background-color-light);
+}
+
+.light body {
+  color: var(--text-color-dark);
+  background: var(--background-color-light);
+}

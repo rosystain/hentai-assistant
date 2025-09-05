@@ -9,7 +9,29 @@ headers = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
 }
 
-def parse_filename(text):
+def extract_parody(text, translator):
+    # 匹配末尾是 () [后缀] 的情况，提取 () 内内容
+    match = re.search(r'\(([^)]+)\)\s*\[.*\]\s*$', text)
+    if match:
+        parody = match.group(1).strip()
+    else:
+        # 匹配末尾直接是 () 的情况
+        match = re.search(r'\(([^)]+)\)\s*$', text)
+        parody = match.group(1).strip().lower() if match else None
+
+    if parody:
+        # 拆分日文顿号并去掉每个部分前后空格
+        if '、' in parody:
+            parts = [part.strip() for part in parody.split('、')]
+            # 分别翻译
+            translated_parts = [translator.get_translation(part.strip(), 'parody') for part in parts]
+            parody_translated = ', '.join(translated_parts)
+        else:
+            parody_translated = translator.get_translation(parody.strip(), 'parody')
+        return parody_translated
+    return None
+
+def parse_filename(text, translator):
     # 去除所有括号内的内容, 将清理后的文本作为标题
     title = re.sub(r'\[.*?\]|\(.*?\)', '', text).strip()
     print(f'从文件名{text}中解析到 Title:', title)
@@ -21,6 +43,8 @@ def parse_filename(text):
     else:
         # 没有活动号，就从头开始
         after_c = text
+    # 取最后一个括号里的内容为原作信息
+    parody = extract_parody(after_c, translator)
     # 匹配开头[]内的内容,在EH的命名规范中,它总是代表作者信息
     search_author = re.search(r'\[(.+?)\]', after_c)
     if not search_author == None:
@@ -38,9 +62,9 @@ def parse_filename(text):
                 print('\nWriter:', writer)
                 penciller = penciller.split(s)[1]
                 print('Penciller:', penciller)
-        return title, writer, penciller
+        return title, writer, penciller, parody
     else:
-        return title, None, None
+        return title, None, None, parody
 
 def get_original_tag(text):
     dictpath = check_dirs('data/ehentai/translations/')
@@ -90,28 +114,49 @@ def male_only_taglist():
 class EHentaiTools:
     def __init__(self, cookie, logger=None):
         self.cookie = cookie
-        session = requests.Session()
+        self.logger = logger
+        self.session = requests.Session()
         # 设置全局的 headers
         global headers
-        session.headers.update(headers)
-        session.cookies.update(self.cookie)
-        self.session = session
-        if logger: self.logger = logger
-        else: self.logger = None
+        self.session.headers.update(headers)
+        self.session.cookies.update(cookie)
+
+    def _check_url(self, url, name, error_msg, success_msg, keyword=None):
+        try:
+            response = self.session.get(url, allow_redirects=True, timeout=10)
+            final_url = response.url.lower()
+            valid = True
+            if 'login' in final_url or (keyword and keyword not in final_url):
+                valid = False
+                if self.logger:
+                    self.logger.error(error_msg)
+            else:
+                if self.logger:
+                    self.logger.info(success_msg)
+            return valid
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"无法打开 {url}, 请检查网络: {e}")
+            return False
 
     def is_valid_cookie(self):
-        try:
-            response = self.session.get('https://e-hentai.org/home.php', allow_redirects=True, timeout=10)
-            final_url = response.url
-            if 'login' in final_url:
-                if self.logger: self.logger.error("无法访问 https://e-hentai.org/home.php, Archive 下载功能将不可用")
-                return False
-            elif final_url == 'https://e-hentai.org/home.php':
-                if self.logger: self.logger.info("成功访问 https://e-hentai.org/home.php, Archive 下载功能可用")
-                return True
-        except Exception as e:
-            if self.logger: self.logger.info(f"无法打开 https://e-hentai.org/home.php, 请检查网络: {e}")
-            return None
+        # 先检查 E-Hentai
+        eh_valid = self._check_url(
+            "https://e-hentai.org/home.php",
+            "E-Hentai",
+            "无法访问 https://e-hentai.org/home.php, Archive 下载功能将不可用",
+            "成功访问 https://e-hentai.org/home.php, Archive 下载功能可用"
+        )
+        # 再检查 ExHentai
+        exh_valid = self._check_url(
+            "https://exhentai.org/uconfig.php",
+            "ExHentai",
+            "无法访问 https://exhentai.org/uconfig.php, ExHentai 下载可能受限",
+            "成功访问 https://exhentai.org/uconfig.php, ExHentai 下载功能可用",
+            keyword="uconfig"
+        )
+
+        return eh_valid, exh_valid
 
     # 从 E-Hentai API 获取画廊信息
     def get_gmetadata(self, url):
@@ -136,52 +181,64 @@ class EHentaiTools:
         else:
             if self.logger: self.logger.error(f'解析{url}时遇到了错误')
 
-    # 解析来自 E-Hentai API 的画廊信息
-    def parse_gmetadata(self, data):
-        comicinfo = {}
-        if 'token' in data:
-            comicinfo['Web'] = 'https://exhentai.org/g/{gid}/{token}/'.format(gid=data['gid'],token=data['token'])
-        if 'tags' in data:
-            comicinfo.update(get_original_tag(data['tags']))
-        # 把 Manga 以外的 category 添加到 Tags
-        if not data['category'] == 'Manga':
-            if 'Tags' in comicinfo:
-                comicinfo['Tags'] = comicinfo['Tags'] + ', ' + data['category'].lower()
-            else:
-                comicinfo['Tags'] = data['category'].lower()
-        # 从标题中提取作者信息
-        if not data['title_jpn'] == "": text = data['title_jpn']
-        else: text = data['title']
-        comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'] = parse_filename(text)
-        # 推测一些 Series 信息
-        # 目指せ!楽園計画RX vol.2 (ToLOVEる -とらぶる-)
-        r_pattern = [
-            r'(.+)\s*vol(.+|.*)\d',
-            r'(.+)\W\d'
-        ]
-        for pattern in r_pattern:
-            search_series = re.search(pattern, comicinfo['Title'])
-            if not search_series == None:
-                comicinfo['Series'] = search_series.group(1).strip()
-                break
-        return comicinfo
-    def _download(self, url, path):
+    def _download(self, url, path, task_id=None, tasks=None, tasks_lock=None):
+        eh_valid, exh_valid = self.is_valid_cookie()
+        if exh_valid:
+            url = url.replace("e-hentai.org", "exhentai.org")
+        else:
+            url = url.replace("exhentai.org", "e-hentai.org")
         try:
             with self.session.get(url, stream=True, timeout=30) as r:
                 r.raise_for_status()
+                total_size = int(r.headers.get('content-length', 0))
+                downloaded = 0
+
                 with open(path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
+                        # 检查任务是否被取消
+                        if task_id and tasks and tasks_lock:
+                            with tasks_lock:
+                                task = tasks.get(task_id)
+                                if task and task.cancelled:
+                                    if self.logger:
+                                        self.logger.info(f"任务 {task_id} 被用户取消")
+                                    # 删除已下载的文件
+                                    if os.path.exists(path):
+                                        os.remove(path)
+                                    raise Exception("Task was cancelled by user")
+
                         if chunk:
                             f.write(chunk)
-            if self.logger:
-                self.logger.info(f"下载完成: {path}")
-            print(f"下载完成: {path}")
-            return path
+                            downloaded += len(chunk)
+
+                            # 更新进度信息
+                            if task_id and tasks and tasks_lock:
+                                progress = 0
+                                if total_size > 0:
+                                    progress = min(100, int((downloaded / total_size) * 100))
+
+                                with tasks_lock:
+                                    if task_id in tasks:
+                                        tasks[task_id].progress = progress
+                                        tasks[task_id].downloaded = downloaded
+                                        tasks[task_id].total_size = total_size
+                                        # 直接下载模式无法获取实时速度，设置为0
+                                        tasks[task_id].speed = 0
+                if self.logger:
+                    self.logger.info(f"下载完成: {path}")
+                print(f"下载完成: {path}")
+                return path
         except Exception as e:
             if self.logger:
                 self.logger.error(f"下载失败: {e}")
             return None
+
     def archive_download(self, url, mode):
+        eh_valid, exh_valid = self.is_valid_cookie()
+        if exh_valid:
+            url = url.replace("e-hentai.org", "exhentai.org")
+        else:
+            url = url.replace("exhentai.org", "e-hentai.org")
         response = self.session.get(url)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
