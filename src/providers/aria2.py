@@ -59,22 +59,48 @@ class Aria2RPC:
     def get_version(self):
         return self._request('aria2.getVersion')
 
-    def listen_status(self, gid, logger=None):
-        result = self.tell_status(gid)
-        totallen = int(result['result']['totalLength'])
-
+    def listen_status(self, gid, logger=None, task_id=None, tasks=None, tasks_lock=None):
         elapsed_time = 0
         elapsed_time_2 = 0
 
         while True:
+            # 检查任务是否被取消
+            if task_id and tasks and tasks_lock:
+                with tasks_lock:
+                    task = tasks.get(task_id)
+                    if task and task.cancelled:
+                        if logger:
+                            logger.info(f"任务 {task_id} 被用户取消，正在停止 aria2 下载")
+                        try:
+                            self.remove(gid)
+                        except Exception as e:
+                            if logger:
+                                logger.warning(f"停止 aria2 下载失败: {e}")
+                        return None
+
             result = self.tell_status(gid)
             status = result['result']['status']
             completelen = int(result['result']['completedLength'])
+            totallen = int(result['result']['totalLength'])
             download_speed = int(result['result']['downloadSpeed'])
+
+            # 计算进度百分比
+            progress = 0
+            if totallen > 0:
+                progress = min(100, int((completelen / totallen) * 100))
+
+            # 更新任务进度信息
+            if task_id and tasks and tasks_lock:
+                with tasks_lock:
+                    if task_id in tasks:
+                        tasks[task_id].progress = progress
+                        tasks[task_id].downloaded = completelen
+                        tasks[task_id].total_size = totallen
+                        tasks[task_id].speed = download_speed
 
             # 写入日志
             if logger:
-                logger.info(f"Status: {status}, Downloaded: {completelen}/{totallen} B, Speed: {download_speed} B/s")
+                logger.info(f"Status: {status}, Progress: {progress}%, Downloaded: {completelen}/{totallen} B, Speed: {download_speed} B/s")
 
             # 文件已完成长度达到总长度
             if completelen >= totallen and totallen > 0:

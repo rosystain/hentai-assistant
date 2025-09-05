@@ -1,0 +1,83 @@
+# 版本控制
+.git
+.gitignore
+.github/
+
+# 文档
+README.md
+docs/
+*.md
+
+# Docker 文件
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# 环境和配置
+.env*
+.env.local
+.env.*.local
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 前端开发文件
+src/webui/node_modules/
+src/webui/dist/
+src/webui/.vscode/
+src/webui/e2e/
+src/webui/playwright.config.ts
+src/webui/vitest.config.ts
+src/webui/tsconfig.*.json
+src/webui/package-lock.json
+src/webui/coverage/
+
+# Python 开发文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache/
+*.egg-info/
+
+# 日志和临时文件
+*.log
+*.tmp
+*.temp
+logs/
+data/app.log
+data/*.log
+
+# 下载和数据目录
+downloads/
+data/download/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# 测试文件
+tests/
+test_*.py
+*_test.py
+conftest.py
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# 其他
+.nyc_output/
+coverage/
+.mypy_cache/
+.dmypy.json
