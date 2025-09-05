@@ -115,6 +115,9 @@ class EhTagTranslator:
         threading.Thread(target=check, daemon=True).start()
 
     def get_translation(self, text, namespace=None):
+        text = text.strip().lower()
+        if not namespace == None:
+            namespace = namespace.strip().lower()
         if not self.enable_translation:
             return text
         if namespace:

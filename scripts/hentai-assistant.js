@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hentai Assistant
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      1.8
 // @description  Add a "Hentai Assistant" button on e-hentai.org and exhentai.org, with menu
 // @author       rosystain
 // @match        https://e-hentai.org/*
@@ -17,10 +17,6 @@
 (function () {
     'use strict';
 
-    console.log('Hentai Assistant script loaded');
-    console.log('Current URL:', window.location.href);
-    console.log('Host:', window.location.host);
-    console.log('Pathname:', window.location.pathname);
 
     const IS_EX = window.location.host.includes("exhentai");
 
@@ -45,6 +41,7 @@
 
         const currentUrl = getSetting('server_url', '');
         const currentMode = getSetting('download_mode', 'archive');
+        const showProgressPopup = getSetting('show_progress_popup', 'true') === 'true';
 
         // 检测黑暗模式
         const darkMode = window.matchMedia('(prefers-color-scheme: dark)').matches || IS_EX;
@@ -104,6 +101,13 @@
                     <option value="torrent" ${currentMode === 'torrent' ? 'selected' : ''} style="background: ${darkMode ? '#1a1a1a' : '#fff'}; color: ${darkMode ? '#eee' : '#000'};">Torrent (种子)</option>
                 </select>
             </div>
+            <div style="margin-bottom: 20px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="ha-show-progress-popup" ${showProgressPopup ? 'checked' : ''} style="width: 16px; height: 16px; margin: 0;">
+                    <span>显示进度弹窗</span>
+                </label>
+                <div style="margin-top: 5px; font-size: 12px; color: ${darkMode ? '#ccc' : '#666'};">控制是否显示下载进度弹窗</div>
+            </div>
             <div style="text-align: right;">
                 <button id="ha-save-btn" style="padding: 8px 16px; margin-right: 10px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer;">保存</button>
                 <button id="ha-cancel-btn" style="padding: 8px 16px; background: ${darkMode ? '#555' : '#6c757d'}; color: white; border: none; border-radius: 3px; cursor: pointer;">取消</button>
@@ -116,10 +120,12 @@
         document.getElementById('ha-save-btn').onclick = () => {
             const url = document.getElementById('ha-server-url').value.trim();
             const mode = document.getElementById('ha-download-mode').value;
+            const showProgress = document.getElementById('ha-show-progress-popup').checked;
 
             if (url) {
                 setSetting('server_url', url.replace(/\/$/, ''));
                 setSetting('download_mode', mode);
+                setSetting('show_progress_popup', showProgress.toString());
                 showToast('设置已保存', 'success');
                 style.remove();
                 dialog.remove();
@@ -145,7 +151,6 @@
     const SERVER_URL = getSetting('server_url', '');
     const DOWNLOAD_MODE = getSetting('download_mode', 'archive');
 
-    console.log('Settings loaded:', { SERVER_URL, DOWNLOAD_MODE });
 
 
     // ========== Toast 模块 ==========
@@ -168,32 +173,45 @@
 
         // 发送下载任务函数
         function sendDownload(url, mode) {
-            console.log('sendDownload called with url:', url, 'mode:', mode);
             if (!SERVER_URL) {
                 showToast('请先设置服务器地址', 'error');
                 return;
             }
             const apiUrl = `${SERVER_URL}/api/download?url=${encodeURIComponent(url)}&mode=${mode}`;
-            console.log('apiUrl:', apiUrl);
         GM_xmlhttpRequest({
             method: 'GET',
             url: apiUrl,
             onload: function (response) {
-                console.log('Response:', response);
                 try {
                     const data = JSON.parse(response.responseText);
                     if (data && data.task_id) {
-                        showToast(`已推送下载任务（mode=${mode}），task_id=${data.task_id}`, 'success');
+                        const taskId = data.task_id;
+                        showToast(`已推送下载任务（mode=${mode}），task_id=${taskId}`, 'success');
+
+                        // 添加到活跃任务并开始轮询进度
+                        activeTasks[taskId] = {
+                            status: '进行中',
+                            progress: 0,
+                            downloaded: 0,
+                            total_size: 0,
+                            speed: 0,
+                            filename: null,
+                            lastUpdate: Date.now()
+                        };
+
+                        // 保存到localStorage
+                        saveTasksToStorage();
+
+                        updateProgressPanel();
+                        pollAllTasks(); // 使用批量查询
                     } else {
                         showToast('推送失败：返回数据异常', 'error');
                     }
                 } catch (err) {
-                    console.error(err, response.responseText);
                     showToast('推送失败：返回数据非 JSON', 'error');
                 }
             },
             onerror: function (err) {
-                console.error(err);
                 showToast('推送失败：请求出错，服务器连接失败', 'error');
             }
         });
@@ -245,6 +263,421 @@
     // 初始化 Toast 容器
     createToastContainer();
 
+    // ========== 全局变量 ==========
+    let activeTasks = loadTasksFromStorage(); // 从localStorage恢复任务状态
+    let progressPanel = null; // 进度面板变量
+
+    // 清理过期任务
+    clearExpiredTasks();
+
+    // 预创建进度面板
+    createProgressPanel();
+
+    // 如果有活跃任务，立即更新显示并开始轮询
+    if (Object.keys(activeTasks).length > 0) {
+        updateProgressPanel();
+        pollAllTasks();
+    }
+
+    // 定期检查页面变化，确保进度面板在页面跳转后能正确恢复
+    let lastUrl = window.location.href;
+    setInterval(() => {
+        if (window.location.href !== lastUrl) {
+            lastUrl = window.location.href;
+            progressPanel = null;
+            if (Object.keys(activeTasks).length > 0) {
+                setTimeout(updateProgressPanel, 200);
+            }
+        }
+    }, 1000);
+
+    // 定期清理过期任务（每5分钟清理一次）
+    setInterval(() => {
+        clearExpiredTasks();
+    }, 5 * 60 * 1000);
+
+    // ========== 进度显示模块 ==========
+    // progressPanel 已经在上面声明，这里不再重复声明
+
+    // 持久化存储相关函数
+    const STORAGE_KEY = 'hentai_assistant_active_tasks';
+    const STORAGE_EXPIRY = 24 * 60 * 60 * 1000; // 24小时过期
+
+    function saveTasksToStorage() {
+        const data = {
+            tasks: activeTasks,
+            timestamp: Date.now(),
+            version: '1.0'
+        };
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        } catch (e) {
+            // 保存失败，静默处理
+        }
+    }
+
+    function loadTasksFromStorage() {
+        try {
+            const stored = localStorage.getItem(STORAGE_KEY);
+            if (!stored) return {};
+
+            const data = JSON.parse(stored);
+            const now = Date.now();
+
+            // 检查数据是否过期
+            if (now - data.timestamp > STORAGE_EXPIRY) {
+                localStorage.removeItem(STORAGE_KEY);
+                return {};
+            }
+
+            // 验证数据结构
+            if (!data.tasks || typeof data.tasks !== 'object') {
+                return {};
+            }
+
+            return data.tasks;
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function clearExpiredTasks() {
+        // 清理已完成的或过期的任务
+        const now = Date.now();
+        let hasChanges = false;
+
+        for (const [taskId, task] of Object.entries(activeTasks)) {
+            // 如果任务已完成或失败，且超过5分钟，自动清理
+            if ((task.status === '完成' || task.status === '错误' || task.status === '取消') &&
+                now - (task.lastUpdate || 0) > 5 * 60 * 1000) {
+                delete activeTasks[taskId];
+                hasChanges = true;
+            }
+        }
+
+        if (hasChanges) {
+            saveTasksToStorage();
+        }
+    }
+
+    function createProgressPanel() {
+        // 检查是否已经存在，如果存在则返回
+        let existingPanel = document.getElementById('ha-progress-panel');
+        if (existingPanel) {
+            progressPanel = existingPanel;
+            return progressPanel;
+        }
+
+        const darkMode = window.matchMedia('(prefers-color-scheme: dark)').matches || IS_EX;
+        const colors = {
+            bg: darkMode ? '#2b2b2b' : '#fff',
+            fg: darkMode ? '#eee' : '#000',
+            border: darkMode ? '#555' : '#ccc'
+        };
+
+        progressPanel = document.createElement('div');
+        progressPanel.id = 'ha-progress-panel';
+        progressPanel.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px;
+            background: ${colors.bg}; color: ${colors.fg};
+            border: 2px solid ${colors.border}; border-radius: 10px;
+            padding: 15px; z-index: 10002;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            min-width: 320px; max-width: 450px; max-height: 400px;
+            font-family: Arial, sans-serif; display: none;
+            pointer-events: auto; overflow: hidden;
+        `;
+
+        const header = document.createElement('div');
+        header.textContent = 'Hentai Assistant 下载进度';
+        header.style.cssText = `
+            font-weight: bold; margin-bottom: 10px; text-align: center;
+            border-bottom: 1px solid ${colors.border}; padding-bottom: 5px;
+        `;
+
+        const taskList = document.createElement('div');
+        taskList.id = 'ha-task-list';
+        taskList.style.cssText = 'max-height: 300px; overflow-y: auto; overflow-x: hidden;';
+
+        progressPanel.appendChild(header);
+        progressPanel.appendChild(taskList);
+
+        // 确保body存在后再添加
+        if (document.body) {
+            document.body.appendChild(progressPanel);
+        } else {
+            // 如果body还不存在，等待DOM加载完成
+            document.addEventListener('DOMContentLoaded', () => {
+                document.body.appendChild(progressPanel);
+            });
+        }
+
+        return progressPanel;
+    }
+
+    function updateProgressPanel() {
+        const panel = createProgressPanel();
+        const taskList = document.getElementById('ha-task-list');
+
+        // 检查是否应该显示进度弹窗
+        const showProgressPopup = getSetting('show_progress_popup', 'true') === 'true';
+        if (!showProgressPopup || Object.keys(activeTasks).length === 0) {
+            panel.style.display = 'none';
+            return;
+        }
+
+        // 检测黑暗模式
+        const darkMode = window.matchMedia('(prefers-color-scheme: dark)').matches || IS_EX;
+
+        panel.style.display = 'block';
+        panel.style.zIndex = '10002';
+
+        // 根据任务数量动态调整弹窗大小
+        const taskCount = Object.keys(activeTasks).length;
+        const maxHeight = Math.min(400, Math.max(200, taskCount * 80 + 60)); // 动态高度
+        panel.style.maxHeight = maxHeight + 'px';
+
+        taskList.innerHTML = '';
+        taskList.style.maxHeight = (maxHeight - 60) + 'px';
+
+        for (const [taskId, task] of Object.entries(activeTasks)) {
+            const taskDiv = document.createElement('div');
+            taskDiv.style.cssText = `
+                margin-bottom: 8px; padding: 6px;
+                background: ${darkMode ? '#1a1a1a' : '#f8f9fa'};
+                border-radius: 4px; border: 1px solid ${darkMode ? '#444' : '#ddd'};
+                position: relative;
+            `;
+
+            const closeBtn = document.createElement('div');
+            closeBtn.textContent = '×';
+            closeBtn.style.cssText = `
+                position: absolute; top: 2px; right: 6px; cursor: pointer;
+                color: ${darkMode ? '#ccc' : '#666'}; font-size: 14px;
+                line-height: 1; width: 16px; height: 16px; text-align: center;
+            `;
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                delete activeTasks[taskId];
+                saveTasksToStorage(); // 保存删除操作
+                updateProgressPanel();
+            };
+            taskDiv.appendChild(closeBtn);
+
+            const title = document.createElement('div');
+            title.textContent = task.filename || `任务 ${taskId}`;
+            title.style.cssText = `
+                font-size: 11px; margin-bottom: 4px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                padding-right: 20px;
+            `;
+
+            const status = document.createElement('div');
+            status.textContent = `状态: ${task.status}`;
+            status.style.cssText = `font-size: 10px; margin-bottom: 4px; color: ${getStatusColor(task.status)};`;
+
+            const progressBar = document.createElement('div');
+            progressBar.style.cssText = `
+                width: 100%; height: 6px; background: ${darkMode ? '#333' : '#e9ecef'};
+                border-radius: 3px; overflow: hidden; margin-bottom: 4px;
+            `;
+
+            const progressFill = document.createElement('div');
+            progressFill.style.cssText = `
+                height: 100%; background: ${getProgressColor(task.status)};
+                width: ${task.progress || 0}%; transition: width 0.3s ease;
+            `;
+            progressBar.appendChild(progressFill);
+
+            const details = document.createElement('div');
+            const downloaded = formatBytes(task.downloaded || 0);
+            const total = formatBytes(task.total_size || 0);
+            const speed = formatBytes(task.speed || 0) + '/s';
+            details.textContent = `${task.progress || 0}% (${downloaded}/${total}) ${speed}`;
+            details.style.cssText = `font-size: 9px; color: ${darkMode ? '#ccc' : '#666'};`;
+
+            taskDiv.appendChild(title);
+            taskDiv.appendChild(status);
+            taskDiv.appendChild(progressBar);
+            taskDiv.appendChild(details);
+            taskList.appendChild(taskDiv);
+        }
+
+        let globalCloseBtn = document.getElementById('ha-global-close');
+        if (!globalCloseBtn) {
+            globalCloseBtn = document.createElement('div');
+            globalCloseBtn.id = 'ha-global-close';
+            globalCloseBtn.textContent = '清空全部';
+            globalCloseBtn.style.cssText = `
+                position: absolute; top: 8px; right: 15px; cursor: pointer;
+                color: ${darkMode ? '#ccc' : '#666'}; font-size: 10px; text-decoration: underline;
+            `;
+            globalCloseBtn.onclick = () => {
+                activeTasks = {};
+                saveTasksToStorage(); // 保存清空操作
+                updateProgressPanel();
+            };
+            panel.appendChild(globalCloseBtn);
+        }
+    }
+
+    function getStatusColor(status) {
+        const colors = {
+            '进行中': '#007bff',
+            '完成': '#28a745',
+            '错误': '#dc3545',
+            '取消': '#ffc107'
+        };
+        return colors[status] || '#6c757d';
+    }
+
+    const getProgressColor = getStatusColor;
+
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+
+    function pollAllTasks() {
+        if (!SERVER_URL) return;
+
+        const activeTaskIds = Object.keys(activeTasks);
+        if (activeTaskIds.length === 0) return;
+
+        // 如果只有一个任务，使用单个查询
+        if (activeTaskIds.length === 1) {
+            pollTaskProgress(activeTaskIds[0]);
+            return;
+        }
+
+        // 批量查询所有活跃任务
+        const apiUrl = `${SERVER_URL}/api/tasks?status=进行中&page=1&page_size=100`;
+
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: apiUrl,
+            onload: function (response) {
+                try {
+                    const data = JSON.parse(response.responseText);
+                    if (data.tasks) {
+                        let hasActiveTasks = false;
+
+                        data.tasks.forEach(task => {
+                            if (activeTasks[task.id]) {
+                                activeTasks[task.id] = {
+                                    status: task.status,
+                                    progress: task.progress || 0,
+                                    downloaded: task.downloaded || 0,
+                                    total_size: task.total_size || 0,
+                                    speed: task.speed || 0,
+                                    filename: task.filename,
+                                    lastUpdate: Date.now()
+                                };
+
+                                if (task.status === '进行中') {
+                                    hasActiveTasks = true;
+                                } else {
+                                    // 任务完成或失败，显示最终状态
+                                    showToast(`任务 ${task.filename || task.id} ${task.status}`, task.status === '完成' ? 'success' : 'error');
+
+                                    // 延迟移除任务
+                                    setTimeout(() => {
+                                        delete activeTasks[task.id];
+                                        saveTasksToStorage(); // 保存删除操作
+                                        updateProgressPanel();
+                                    }, 5000);
+                                }
+                            }
+                        });
+
+                        // 保存状态更新
+                        saveTasksToStorage();
+
+                        updateProgressPanel();
+
+                        // 如果还有活跃任务，继续轮询
+                        if (hasActiveTasks) {
+                            setTimeout(() => pollAllTasks(), 2000);
+                        }
+                    }
+                } catch (err) {
+                    // 批量查询失败，回退到单个查询
+                    activeTaskIds.forEach(taskId => {
+                        if (activeTasks[taskId] && activeTasks[taskId].status === '进行中') {
+                            pollTaskProgress(taskId);
+                        }
+                    });
+                }
+            },
+            onerror: function (err) {
+                // 批量查询失败，回退到单个查询
+                activeTaskIds.forEach(taskId => {
+                    if (activeTasks[taskId] && activeTasks[taskId].status === '进行中') {
+                        pollTaskProgress(taskId);
+                    }
+                });
+            }
+        });
+    }
+
+    function pollTaskProgress(taskId) {
+        if (!SERVER_URL) return;
+
+        const apiUrl = `${SERVER_URL}/api/task/${taskId}`;
+
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: apiUrl,
+            onload: function (response) {
+                try {
+                    const task = JSON.parse(response.responseText);
+                    if (task && !task.error) {
+                        activeTasks[taskId] = {
+                            status: task.status,
+                            progress: task.progress || 0,
+                            downloaded: task.downloaded || 0,
+                            total_size: task.total_size || 0,
+                            speed: task.speed || 0,
+                            filename: task.filename,
+                            lastUpdate: Date.now()
+                        };
+
+                        // 保存状态更新
+                        saveTasksToStorage();
+
+                        updateProgressPanel();
+
+                        // 如果任务仍在进行中，继续轮询
+                        if (task.status === '进行中') {
+                            setTimeout(() => pollTaskProgress(taskId), 2000); // 每2秒轮询一次
+                        } else {
+                            // 任务完成或失败，显示最终状态
+                            showToast(`任务 ${task.filename || taskId} ${task.status}`, task.status === '完成' ? 'success' : 'error');
+
+                            // 延迟移除任务
+                            setTimeout(() => {
+                                delete activeTasks[taskId];
+                                saveTasksToStorage(); // 保存删除操作
+                                updateProgressPanel();
+                            }, 5000);
+                        }
+                    } else {
+                        // 任务不存在或查询失败
+                    }
+                } catch (err) {
+                    // 解析失败
+                }
+            },
+            onerror: function (err) {
+                // 获取失败
+            }
+        });
+    }
+
     // 添加样式
     const style = document.createElement('style');
     style.textContent = `
@@ -279,10 +712,9 @@
     document.head.appendChild(style);
 
 
-    console.log('Checking page type');
+    // 直接执行页面检测和按钮添加
     const gd5Element = document.querySelector('#gmid #gd5');
     if (gd5Element) {
-        console.log('Detail page detected');
         // 详情页代码
 
     // 创建菜单按钮
@@ -405,37 +837,33 @@
     // 初始应用一次
     applyTheme();
     } else {
-        console.log('List page detected');
         // 列表页面代码
         addListButtons();
     }
 
     function addListButtons() {
-        console.log('addListButtons called');
         const trList = document.querySelectorAll(".itg tr, .itg .gl1t");
-        console.log('trList:', trList);
         if (trList && trList.length) {
-            console.log('Found trList with length:', trList.length);
             trList.forEach(function (tr) {
                 let a = tr.querySelector(".glname a, .gl1e a, .gl1t");
-                if (tr.classList.contains('gl1t')) a = tr.querySelector('a');
+                if (tr.classList.contains('gl1t')) {
+                    a = tr.querySelector('a');
+                }
                 if (!a) return;
+
                 const itemUrl = a.href;
+
+                // 添加下载按钮
                 let gldown = tr.querySelector(".gldown");
-                console.log('gldown:', gldown);
                 if (gldown) {
                     const downloadBtn = document.createElement('div');
                     downloadBtn.textContent = "🡇";
                     downloadBtn.title = "[Hentai Assistant] 推送下载";
                     downloadBtn.className = 'ha-download-btn';
-                    downloadBtn.onclick = () => {
-                        console.log('Button clicked, itemUrl:', itemUrl);
-                        sendDownload(itemUrl, DOWNLOAD_MODE);
-                    };
+                    downloadBtn.onclick = () => sendDownload(itemUrl, DOWNLOAD_MODE);
                     gldown.appendChild(downloadBtn);
                 }
             });
         }
-        }
+    }
     })();
-

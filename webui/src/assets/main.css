@@ -1,0 +1,140 @@
+@import './base.css';
+
+/* General layout */
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+main {
+  flex-grow: 1;
+}
+
+/* Links */
+a {
+  text-decoration: none;
+  color: var(--primary-color);
+  transition: color 0.3s ease;
+}
+
+a:hover {
+  color: #0056b3;
+}
+
+/* Buttons */
+button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: var(--border-radius);
+  background-color: var(--primary-color);
+  color: var(--white-color);
+  cursor: pointer;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+}
+
+button:hover {
+  background-color: #0056b3;
+}
+
+button:disabled {
+  background-color: var(--secondary-color);
+  cursor: not-allowed;
+}
+
+/* Form elements */
+input[type="text"],
+select,
+textarea {
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-size: 1rem;
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--white-color);
+  color: var(--text-color-dark);
+  transition: all 0.3s ease;
+}
+
+input[type="text"]:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--primary-color);
+  outline: none;
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+/* Utility classes */
+.text-center {
+  text-align: center;
+}
+
+.margin-top-20 {
+  margin-top: 20px;
+}
+
+.error-message {
+  color: var(--danger-color);
+  background-color: rgba(220, 53, 69, 0.1);
+  border: 1px solid var(--danger-color);
+  padding: 10px;
+  border-radius: var(--border-radius);
+  margin-bottom: 15px;
+  text-align: center;
+}
+
+.success-message {
+  color: var(--success-color);
+  background-color: rgba(40, 167, 69, 0.1);
+  border: 1px solid var(--success-color);
+  padding: 10px;
+  border-radius: var(--border-radius);
+  margin-bottom: 15px;
+  text-align: center;
+}
+
+.info-message {
+  color: var(--info-color);
+  background-color: rgba(23, 162, 184, 0.1);
+  border: 1px solid var(--info-color);
+  padding: 10px;
+  border-radius: var(--border-radius);
+  margin-bottom: 15px;
+  text-align: center;
+}
+
+/* 移动端响应式 */
+@media (max-width: 768px) {
+  main {
+    /* 移除padding让背景完全填充 */
+  }
+
+  button {
+    padding: 8px 16px;
+    font-size: 0.9rem;
+  }
+
+  input[type="text"],
+  select,
+  textarea {
+    padding: 8px 12px;
+    font-size: 0.9rem;
+  }
+}
+
+/* 深色模式适配 */
+.dark input[type="text"],
+.dark select,
+.dark textarea {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-color);
+  color: var(--text-color-light);
+}
+
+.dark input[type="text"]:focus,
+.dark select:focus,
+.dark textarea:focus {
+  border-color: var(--primary-color);
+}
