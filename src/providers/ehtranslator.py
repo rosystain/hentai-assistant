@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 from utils import remove_emoji
 
 DB_URL = "https://github.com/EhTagTranslation/Database/releases/latest/download/db.text.json"
-DB_PATH = "data/ehentai/ehtranslator/db.text.json"
-META_PATH = "data/ehentai/ehtranslator/db_meta.json"
+DB_PATH = "data/ehtranslator/db.text.json"
+META_PATH = "data/ehtranslator/db_meta.json"
 CHECK_INTERVAL_HOURS = 24  # 每 24 小时检查更新
 
 def check_dirs(path):

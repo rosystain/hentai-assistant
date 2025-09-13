@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         Hentai Assistant
 // @namespace    http://tampermonkey.net/
-// @version      1.8
-// @description  Add a "Hentai Assistant" button on e-hentai.org and exhentai.org, with menu
+// @version      1.9
+// @description  Add a "Hentai Assistant" button on e-hentai.org, exhentai.org and nhentai.net, with menu
 // @author       rosystain
 // @match        https://e-hentai.org/*
 // @match        https://exhentai.org/*
+// @match        https://nhentai.net/*
+// @match        https://nhentai.xxx/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -19,6 +21,7 @@
 
 
     const IS_EX = window.location.host.includes("exhentai");
+    const IS_NHENTAI = window.location.host.includes("nhentai");
 
     // 使用 localStorage 存储设置
     function getSetting(key, defaultValue) {
@@ -177,45 +180,62 @@
                 showToast('请先设置服务器地址', 'error');
                 return;
             }
-            const apiUrl = `${SERVER_URL}/api/download?url=${encodeURIComponent(url)}&mode=${mode}`;
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url: apiUrl,
-            onload: function (response) {
-                try {
-                    const data = JSON.parse(response.responseText);
-                    if (data && data.task_id) {
-                        const taskId = data.task_id;
-                        showToast(`已推送下载任务（mode=${mode}），task_id=${taskId}`, 'success');
 
-                        // 添加到活跃任务并开始轮询进度
-                        activeTasks[taskId] = {
-                            status: '进行中',
-                            progress: 0,
-                            downloaded: 0,
-                            total_size: 0,
-                            speed: 0,
-                            filename: null,
-                            lastUpdate: Date.now()
-                        };
+            // 检测是否为nhentai URL并添加额外参数
+            let apiUrl = `${SERVER_URL}/api/download?url=${encodeURIComponent(url)}&mode=${mode}`;
 
-                        // 保存到localStorage
-                        saveTasksToStorage();
+            if (IS_NHENTAI) {
+                // 为nhentai添加特殊处理参数
+                apiUrl += '&source=nhentai';
 
-                        updateProgressPanel();
-                        pollAllTasks(); // 使用批量查询
-                    } else {
-                        showToast('推送失败：返回数据异常', 'error');
+                // 如果是详情页，尝试获取画廊ID
+                if (isNHentaiDetailPage()) {
+                    const galleryInfo = getNHentaiGalleryInfo();
+                    if (galleryInfo) {
+                        apiUrl += `&gallery_id=${galleryInfo.id}&title=${encodeURIComponent(galleryInfo.title)}`;
                     }
-                } catch (err) {
-                    showToast('推送失败：返回数据非 JSON', 'error');
                 }
-            },
-            onerror: function (err) {
-                showToast('推送失败：请求出错，服务器连接失败', 'error');
             }
-        });
-    }
+
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: apiUrl,
+                onload: function (response) {
+                    try {
+                        const data = JSON.parse(response.responseText);
+                        if (data && data.task_id) {
+                            const taskId = data.task_id;
+                            const siteName = IS_NHENTAI ? 'NHentai' : (IS_EX ? 'ExHentai' : 'E-Hentai');
+                            showToast(`已推送 ${siteName} 下载任务（mode=${mode}），task_id=${taskId}`, 'success');
+
+                            // 添加到活跃任务并开始轮询进度
+                            activeTasks[taskId] = {
+                                status: '进行中',
+                                progress: 0,
+                                downloaded: 0,
+                                total_size: 0,
+                                speed: 0,
+                                filename: null,
+                                lastUpdate: Date.now()
+                            };
+
+                            // 保存到localStorage
+                            saveTasksToStorage();
+
+                            updateProgressPanel();
+                            pollAllTasks(); // 使用批量查询
+                        } else {
+                            showToast('推送失败：返回数据异常', 'error');
+                        }
+                    } catch (err) {
+                        showToast('推送失败：返回数据非 JSON', 'error');
+                    }
+                },
+                onerror: function (err) {
+                    showToast('推送失败：请求出错，服务器连接失败', 'error');
+                }
+            });
+        }
 
     function showToast(message, type = 'info', duration = 3000) {
         const container = createToastContainer();
@@ -708,137 +728,360 @@
     .gl3e > div:nth-child(6) {
         left: 45px;
     }
+
+    /* NHentai 样式 */
+    .nhentai-ha-container {
+        margin-top: 5px;
+        padding: 0;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        text-align: left;
+        display: inline-block;
+        vertical-align: top;
+    }
+
+    .nhentai-ha-container.dark {
+        background: transparent;
+        color: #eee;
+    }
+
+    .nhentai-ha-btn {
+        padding: 6px 12px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: normal;
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        display: inline-block;
+        line-height: 26px;
+        vertical-align: top;
+    }
+
+    .nhentai-ha-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    .nhentai-ha-btn:active {
+        transform: translateY(0);
+    }
+
+    /* NHentai 列表页按钮样式 */
+    .nhentai-list-btn {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        width: 32px;
+        height: 32px;
+        background: rgba(128, 128, 128, 0.8);
+        border-radius: 8px;
+        color: white;
+        text-align: center;
+        line-height: 28px;
+        cursor: pointer;
+        font-size: 16px;
+        z-index: 10;
+        transition: all 0.2s ease;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .nhentai-list-btn:hover {
+        background: rgba(128, 128, 128, 1);
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    }
     `;
     document.head.appendChild(style);
 
 
-    // 直接执行页面检测和按钮添加
-    const gd5Element = document.querySelector('#gmid #gd5');
-    if (gd5Element) {
-        // 详情页代码
+    // ========== NHentai 功能 ==========
+    // 获取nhentai画廊信息
+    function getNHentaiGalleryInfo() {
+        const urlMatch = window.location.pathname.match(/^\/g\/(\d+)/);
+        if (!urlMatch) return null;
 
-    // 创建菜单按钮
-    const menuElement = document.createElement('p');
-    menuElement.className = 'g2';
+        const galleryId = urlMatch[1];
 
-    const menuImg = document.createElement('img');
-    menuImg.src = 'https://ehgt.org/g/mr.gif';
+        // 尝试从页面获取信息
+        const titleElement = document.querySelector('#info h1, #info h2');
+        const title = titleElement ? titleElement.textContent.trim() : `NHentai Gallery ${galleryId}`;
 
-    const menuLink = document.createElement('a');
-    menuLink.href = '#';
-    menuLink.textContent = 'Hentai Assistant';
-
-    // 创建二级菜单
-    const menu = document.createElement('div');
-    menu.style.position = 'absolute';
-    menu.style.padding = '5px 0';
-    menu.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
-    menu.style.display = 'none';
-    menu.style.zIndex = 9999;
-    menu.style.borderRadius = '10px';
-    menu.style.minWidth = '180px';
-
-    // 当前是否暗色模式
-    let darkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-    // 应用主题
-    function applyTheme() {
-        if (darkMode) {
-            menu.style.background = '#2b2b2b';
-            menu.style.border = '1px solid #555';
-            menu.querySelectorAll('div').forEach(item => {
-                item.style.color = '#eee';
-            });
-        } else {
-            menu.style.background = '#fff';
-            menu.style.border = '1px solid #ccc';
-            menu.querySelectorAll('div').forEach(item => {
-                item.style.color = '#000';
-            });
-        }
-    }
-
-    // 菜单项样式
-    function styleMenuItem(item) {
-        item.style.padding = '5px 20px';
-        item.style.cursor = 'pointer';
-        item.style.borderRadius = '8px';
-        item.onmouseover = () => item.style.background = darkMode ? '#444' : '#eee';
-        item.onmouseout = () => item.style.background = '';
-        return item;
-    }
-
-
-    // 菜单项函数
-    function createMenuItem(text, mode) {
-        const item = document.createElement('div');
-        item.textContent = text;
-        styleMenuItem(item);
-        item.onclick = function (e) {
-            menu.style.display = 'none';
-            const currentUrl = window.location.href;
-            sendDownload(currentUrl, mode);
-            e.stopPropagation();
-            return false;
+        return {
+            id: galleryId,
+            title: title,
+            url: window.location.href
         };
-        return item;
     }
 
-    const sendMode1 = createMenuItem('推送种子下载任务', 'torrent');
-    const sendMode2 = createMenuItem('推送归档下载任务', 'archive');
+    // 检查是否为nhentai详情页
+    function isNHentaiDetailPage() {
+        return IS_NHENTAI && /^\/g\/\d+/.test(window.location.pathname);
+    }
 
-    // 菜单项：修改服务器地址
-    const editBtn = document.createElement('div');
-    editBtn.textContent = '修改服务器地址';
-    styleMenuItem(editBtn);
-    editBtn.onclick = function (e) {
-        menu.style.display = 'none';
-        const newBase = prompt('请输入你的 Hentai Assistant 服务地址（如 http://127.0.0.1:5001 ）', SERVER_URL);
-        if (newBase) {
-            setSetting('server_url', newBase.replace(/\/$/, ''));
-            showToast('已保存，下次刷新页面生效', 'success');
-        }
-        e.stopPropagation();
-        return false;
-    };
+    // 检查是否为nhentai列表页
+    function isNHentaiListPage() {
+        return IS_NHENTAI && (window.location.pathname === '/' || window.location.pathname.startsWith('/search') || window.location.pathname.startsWith('/tag'));
+    }
 
-    menu.appendChild(sendMode1);
-    menu.appendChild(sendMode2);
-    menu.appendChild(editBtn);
+    // ========== NHentai 按钮注入函数 ==========
+    function addNHentaiDetailButton() {
+        const infoElement = document.querySelector('#info');
+        if (!infoElement) return;
 
-    document.body.appendChild(menu);
+        // 检查是否已经添加过按钮
+        if (document.querySelector('.nhentai-ha-container')) return;
 
-    // 菜单定位在按钮下方
-    menuLink.onclick = function (e) {
-        const rect = menuLink.getBoundingClientRect();
-        menu.style.left = rect.left + window.scrollX + 'px';
-        menu.style.top = rect.bottom + window.scrollY + 'px';
-        menu.style.display = 'block';
-        e.preventDefault();
-        e.stopPropagation();
-    };
+        // 检测黑暗模式
+        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 
-    menu.onclick = (e) => e.stopPropagation();
-    document.addEventListener('click', () => menu.style.display = 'none');
+        // 创建下载按钮容器
+        const buttonContainer = document.createElement('div');
+        buttonContainer.className = `nhentai-ha-container${isDark ? ' dark' : ''}`;
 
-    menuElement.appendChild(menuImg);
-    menuElement.appendChild(document.createTextNode(' '));
-    menuElement.appendChild(menuLink);
+        // 创建下载按钮
+        const downloadBtn = document.createElement('button');
+        downloadBtn.className = 'nhentai-ha-btn';
+        downloadBtn.textContent = '📥 Hentai Assistant 下载';
+        downloadBtn.onclick = () => {
+            const currentUrl = window.location.href;
+            const galleryInfo = getNHentaiGalleryInfo();
+            if (galleryInfo) {
+                showToast(`正在推送 NHentai 画廊: ${galleryInfo.title}`, 'info');
+            }
+            sendDownload(currentUrl, DOWNLOAD_MODE);
+        };
 
-    gd5Element.appendChild(menuElement);
+        buttonContainer.appendChild(downloadBtn);
+        infoElement.appendChild(buttonContainer);
 
-    // 监听系统/浏览器主题切换
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    mq.addEventListener('change', e => {
-        darkMode = e.matches;
-        applyTheme();
-    });
+        // 同时检查页面下方的画廊卡片并注入按钮
+        addNHentaiDetailGalleryButtons();
+    }
 
-    // 初始应用一次
-    applyTheme();
+    // 为详情页下方的画廊卡片注入按钮
+    function addNHentaiDetailGalleryButtons() {
+        const galleryLinks = document.querySelectorAll('.gallery a.cover');
+        const processedContainers = new Set();
+
+        galleryLinks.forEach(link => {
+            // 确保是画廊链接（包含/g/路径）
+            if (!link.href || !link.href.includes('/g/')) return;
+
+            const container = link.closest('.gallery') || link.parentElement;
+            if (!container || processedContainers.has(container)) return;
+
+            // 检查是否已经注入了按钮
+            if (container.querySelector('.nhentai-list-btn')) return;
+
+            const downloadBtn = document.createElement('div');
+            downloadBtn.textContent = '📥';
+            downloadBtn.title = '[Hentai Assistant] 推送下载';
+            downloadBtn.className = 'nhentai-list-btn';
+            downloadBtn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                showToast('正在推送相关 NHentai 画廊下载任务...', 'info');
+                sendDownload(link.href, DOWNLOAD_MODE);
+            };
+
+            // 设置相对定位
+            if (container.style.position !== 'relative') {
+                container.style.position = 'relative';
+            }
+
+            container.appendChild(downloadBtn);
+            processedContainers.add(container);
+        });
+    }
+
+    function addNHentaiListButtons() {
+        // 可以扩展选择器以覆盖更多类型的画廊卡片
+        const gallerySelectors = [
+            '.gallery a.cover',           // 标准画廊链接
+        ];
+
+        const processedContainers = new Set();
+
+        gallerySelectors.forEach(selector => {
+            const galleryLinks = document.querySelectorAll(selector);
+            galleryLinks.forEach(link => {
+                // 确保是画廊链接（包含/g/路径）
+                if (!link.href || !link.href.includes('/g/')) return;
+
+                const container = link.closest('.gallery') || link.parentElement;
+                if (!container || processedContainers.has(container)) return;
+
+                // 检查是否已经注入了按钮
+                if (container.querySelector('.nhentai-list-btn')) return;
+
+                const downloadBtn = document.createElement('div');
+                downloadBtn.textContent = '📥';
+                downloadBtn.title = '[Hentai Assistant] 推送下载';
+                downloadBtn.className = 'nhentai-list-btn';
+                downloadBtn.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showToast('正在推送 NHentai 画廊下载任务...', 'info');
+                    sendDownload(link.href, DOWNLOAD_MODE);
+                };
+
+                // 设置相对定位
+                if (container.style.position !== 'relative') {
+                    container.style.position = 'relative';
+                }
+
+                container.appendChild(downloadBtn);
+                processedContainers.add(container);
+            });
+        });
+
+        // 定期检查新加载的内容（处理分页和动态加载）
+        setTimeout(addNHentaiListButtons, 2000);
+    }
+
+    // 直接执行页面检测和按钮添加
+    if (isNHentaiDetailPage()) {
+        // NHentai 详情页代码
+        addNHentaiDetailButton();
+    } else if (isNHentaiListPage()) {
+        // NHentai 列表页代码
+        addNHentaiListButtons();
     } else {
-        // 列表页面代码
-        addListButtons();
+        const gd5Element = document.querySelector('#gmid #gd5');
+        if (gd5Element) {
+            // E-Hentai/ExHentai 详情页代码
+
+            // 创建菜单按钮
+            const menuElement = document.createElement('p');
+            menuElement.className = 'g2';
+
+            const menuImg = document.createElement('img');
+            menuImg.src = 'https://ehgt.org/g/mr.gif';
+
+            const menuLink = document.createElement('a');
+            menuLink.href = '#';
+            menuLink.textContent = 'Hentai Assistant';
+
+            // 创建二级菜单
+            const menu = document.createElement('div');
+            menu.style.position = 'absolute';
+            menu.style.padding = '5px 0';
+            menu.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+            menu.style.display = 'none';
+            menu.style.zIndex = 9999;
+            menu.style.borderRadius = '10px';
+            menu.style.minWidth = '180px';
+
+            // 当前是否暗色模式
+            let darkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+            // 应用主题
+            function applyTheme() {
+                if (darkMode) {
+                    menu.style.background = '#2b2b2b';
+                    menu.style.border = '1px solid #555';
+                    menu.querySelectorAll('div').forEach(item => {
+                        item.style.color = '#eee';
+                    });
+                } else {
+                    menu.style.background = '#fff';
+                    menu.style.border = '1px solid #ccc';
+                    menu.querySelectorAll('div').forEach(item => {
+                        item.style.color = '#000';
+                    });
+                }
+            }
+
+            // 菜单项样式
+            function styleMenuItem(item) {
+                item.style.padding = '5px 20px';
+                item.style.cursor = 'pointer';
+                item.style.borderRadius = '8px';
+                item.onmouseover = () => item.style.background = darkMode ? '#444' : '#eee';
+                item.onmouseout = () => item.style.background = '';
+                return item;
+            }
+
+            // 菜单项函数
+            function createMenuItem(text, mode) {
+                const item = document.createElement('div');
+                item.textContent = text;
+                styleMenuItem(item);
+                item.onclick = function (e) {
+                    menu.style.display = 'none';
+                    const currentUrl = window.location.href;
+                    sendDownload(currentUrl, mode);
+                    e.stopPropagation();
+                    return false;
+                };
+                return item;
+            }
+
+            const sendMode1 = createMenuItem('推送种子下载任务', 'torrent');
+            const sendMode2 = createMenuItem('推送归档下载任务', 'archive');
+
+            // 菜单项：修改服务器地址
+            const editBtn = document.createElement('div');
+            editBtn.textContent = '修改服务器地址';
+            styleMenuItem(editBtn);
+            editBtn.onclick = function (e) {
+                menu.style.display = 'none';
+                const newBase = prompt('请输入你的 Hentai Assistant 服务地址（如 http://127.0.0.1:5001 ）', SERVER_URL);
+                if (newBase) {
+                    setSetting('server_url', newBase.replace(/\/$/, ''));
+                    showToast('已保存，下次刷新页面生效', 'success');
+                }
+                e.stopPropagation();
+                return false;
+            };
+
+            menu.appendChild(sendMode1);
+            menu.appendChild(sendMode2);
+            menu.appendChild(editBtn);
+
+            document.body.appendChild(menu);
+
+            // 菜单定位在按钮下方
+            menuLink.onclick = function (e) {
+                const rect = menuLink.getBoundingClientRect();
+                menu.style.left = rect.left + window.scrollX + 'px';
+                menu.style.top = rect.bottom + window.scrollY + 'px';
+                menu.style.display = 'block';
+                e.preventDefault();
+                e.stopPropagation();
+            };
+
+            menu.onclick = (e) => e.stopPropagation();
+            document.addEventListener('click', () => menu.style.display = 'none');
+
+            menuElement.appendChild(menuImg);
+            menuElement.appendChild(document.createTextNode(' '));
+            menuElement.appendChild(menuLink);
+
+            gd5Element.appendChild(menuElement);
+
+            // 监听系统/浏览器主题切换
+            const mq = window.matchMedia('(prefers-color-scheme: dark)');
+            mq.addEventListener('change', e => {
+                darkMode = e.matches;
+                applyTheme();
+            });
+
+            // 初始应用一次
+            applyTheme();
+        } else {
+            // 列表页面代码
+            addListButtons();
+        }
     }
 
     function addListButtons() {

@@ -15,7 +15,8 @@ from logging.handlers import RotatingFileHandler
 from providers import komga
 from providers import aria2
 from providers import ehentai
-from utils import check_dirs
+from providers import nhentai
+from utils import check_dirs, is_valid_zip, parse_filename
 import nfotool
 from database import task_db
 
@@ -139,8 +140,15 @@ def check_config():
     cookie = ehentai_config.get('cookie', '')
     app.config['eh_cookie'] = {"cookie": cookie} if cookie else {"cookie": ""}
 
+    # nhentai 设置
+    nhentai_config = config_data.get('nhentai', {})
+    nhentai_cookie = nhentai_config.get('cookie', '')
+    app.config['nhentai_cookie'] = {"cookie": nhentai_cookie} if nhentai_cookie else {"cookie": ""}
+
     eh = ehentai.EHentaiTools(cookie=app.config['eh_cookie'], logger=global_logger)
+    nh = nhentai.NHentaiTools(cookie=app.config['nhentai_cookie'], logger=global_logger)
     hath_toggle = eh.is_valid_cookie()
+    nh_toggle = nh.is_valid_cookie()
 
     # Aria2 RPC 设置
     aria2_config = config_data.get('aria2', {})
@@ -198,6 +206,7 @@ def check_config():
         komga_toggle = False
 
     app.config['hath_toggle'] = hath_toggle
+    app.config['nh_toggle'] = nh_toggle
     app.config['aria2_toggle'] = aria2_toggle
     app.config['komga_toggle'] = komga_toggle
     app.config['checking_config'] = False
@@ -246,20 +255,10 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
         return None
     else:
         filename = os.path.basename(file)
-        if filename.lower().endswith("zip"):
+        if filename.lower().endswith(('.zip', '.cbz')):
             local_file_path = os.path.join(app.config['aria2_download_dir'], filename)
         else:
-            parent_dir = os.path.dirname(file)
-            parent_name = os.path.basename(parent_dir)
-            archive_name = os.path.join(app.config['aria2_download_dir'], parent_name + ".zip")
-            # 打包父目录为 zip
-            shutil.make_archive(
-                base_name = os.path.splitext(archive_name)[0],
-                format = "zip",
-                root_dir = parent_dir,
-                base_dir = "."
-            )
-            local_file_path = archive_name
+            local_file_path = os.path.dirname(file)
 
     # 完成下载后, 为压缩包添加元数据
     if os.path.exists(file):
@@ -374,9 +373,12 @@ def parse_eh_tags(tags):
                 if tag_name in ehentai.male_only_taglist():
                     tag_name = eh_translator.get_translation(tag_name, namespace)
                     tag_list.append(tag_name)
-            elif namespace == 'other':
+            elif namespace == 'other' or namespace == 'tag':
                 if tag_name not in ['extraneous ads',  'already uploaded', 'missing cover', 'forbidden content', 'replaced', 'compilation', 'incomplete', 'caption']:
-                    tag_name = eh_translator.get_translation(tag_name, namespace)
+                    if namespace == 'tag':
+                        tag_name = eh_translator.get_translation(tag_name)
+                    else:
+                        tag_name = eh_translator.get_translation(tag_name, namespace)
                     tag_list.append(tag_name)
     # 进行以下去重
     tag_list_sorted = sorted(set(tag_list), key=tag_list.index)
@@ -387,10 +389,16 @@ def parse_eh_tags(tags):
     if not collectionlist == []: comicinfo['SeriesGroup'] = ', '.join(collectionlist)
     return comicinfo
 
-# 解析来自 E-Hentai API 的画廊信息
+# 解析来自 E-Hentai 或 nhentai API 的画廊信息
 def parse_gmetadata(data):
     comicinfo = {}
-    if 'token' in data:
+    # 检查是否为 nhentai 数据（没有 token 字段）
+    if 'token' not in data or data.get('token') == '':
+        # nhentai 数据
+        if 'gid' in data:
+            comicinfo['Web'] = f"https://nhentai.net/g/{data['gid']}/"
+    else:
+        # ehentai 数据
         comicinfo['Web'] = (
             f"https://exhentai.org/g/{data['gid']}/{data['token']}/, "
             f"https://e-hentai.org/g/{data['gid']}/{data['token']}/"
@@ -414,9 +422,9 @@ def parse_gmetadata(data):
     if comic_market:
        add_tag_first(comicinfo, f"c{comic_market.group(1)}")
     if 'SeriesGroup' not in comicinfo:
-        comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'], comicinfo['SeriesGroup'] = ehentai.parse_filename(text, eh_translator)
+        comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'], comicinfo['SeriesGroup'] = parse_filename(text, eh_translator)
     else:
-        comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'], _ = ehentai.parse_filename(text, eh_translator)
+        comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'], _ = parse_filename(text, eh_translator)
     if comicinfo['Writer'] == None:
         tags = data.get("tags", [])
         fill_field(comicinfo, "Writer", tags, ["group", "artist"])
@@ -434,7 +442,6 @@ def parse_gmetadata(data):
     return comicinfo
 
 def check_task_cancelled(task_id):
-    """检查任务是否被取消"""
     with tasks_lock:
         task = tasks.get(task_id)
         if task and task.cancelled:
@@ -447,94 +454,8 @@ def download_task(url, mode, task_id, logger=None):
         # 检查是否被取消
         check_task_cancelled(task_id)
 
-        eh = ehentai.EHentaiTools(cookie=app.config['eh_cookie'], logger=logger)
-        gmetadata = eh.get_gmetadata(url)
-        if not gmetadata or 'gid' not in gmetadata:
-            raise ValueError("Failed to retrieve valid gmetadata for the given URL.")
-        if 'title_jpn' in gmetadata:
-            title = html.unescape(gmetadata['title_jpn'])
-        else:
-            title = html.unescape(gmetadata['title'])
-        filename = f"{sanitize_filename(title)} [{gmetadata['gid']}].zip"
-        print(f"准备下载: {filename}")
-
-        # 更新内存中的任务信息
-        with tasks_lock:
-            if task_id in tasks:
-                tasks[task_id].filename = title # 在获取到文件名后立即设置
-
-        # 同时更新数据库
-        task_db.update_task(task_id, filename=filename)
-
-        # 检查是否被取消
-        check_task_cancelled(task_id)
-
-        # 根据功能启用情况设置下载模式
-        eh_mode = get_eh_mode(app.config, mode)
-        result = eh.archive_download(url=url, mode=eh_mode)
-
-        # 检查是否被取消
-        check_task_cancelled(task_id)
-
-        if result:
-            if result[0] == 'torrent':
-                dl = send_to_aria2(torrent=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
-                if dl == None:
-                    result = eh.archive_download(url=url, mode='archive')
-            elif result[0] == 'archive':
-                if not app.config['aria2_toggle']:
-                    # 通过 ehentai 的 session 直接下载
-                    dl = eh._download(
-                        url=result[1],
-                        path=os.path.join(os.path.abspath(check_dirs('./data/download/ehentai')), filename),
-                        task_id=task_id,
-                        tasks=tasks,
-                        tasks_lock=tasks_lock
-                    )
-                else:
-                    dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
-
-            # 检查是否被取消
-            check_task_cancelled(task_id)
-
-            if dl:
-                if 'real_download_dir' in app.config:
-                    ml = os.path.join(app.config['real_download_dir'], os.path.basename(dl))
-                else:
-                    ml = dl
-                # 将 gmetadata 转换为兼容 comicinfo 的形式
-                metadata = parse_gmetadata(gmetadata)
-                if metadata['Writer'] or metadata['Tags']:
-                    cbz = nfotool.write_xml_to_zip(dl, ml, metadata, app=app, logger=logger)
-
-                # 检查是否被取消
-                check_task_cancelled(task_id)
-
-                # 将文件移动到 Komga 媒体库
-                # 当带有 multi-work series 标签时, 将 metadata['Series'] 作为系列，否则统一使用 oneshot
-                if app.config['komga_toggle']:
-                    if cbz and app.config['komga_library_dir']:
-                        if 'Series' in metadata:
-                            series = metadata['Series']
-                        else:
-                            series = app.config['komga_oneshot']
-                        # 导入到 Komga
-                        library_path = app.config['komga_library_dir']
-                        destination = os.path.join(library_path, metadata['Penciller'], series)
-                        if logger: logger.info(f"开始移动: {cbz} ==> {destination}")
-                        result = shutil.move(cbz, check_dirs(destination))
-                        if logger: logger.info("移动完毕")
-                        kmg = komga.KomgaAPI(server=app.config['komga_server'], token=app.config['komga_token'], logger=logger)
-                        if app.config['komga_library_id']:
-                            kmg.scan_library(app.config['komga_library_id'])
-
-        if logger: logger.info(f"Task {task_id} completed successfully.")
-        with tasks_lock:
-            if task_id in tasks:
-                tasks[task_id].status = "完成"
-
-        # 更新数据库状态
-        task_db.update_task(task_id, status="完成")
+        # 检测 URL 类型并选择相应的下载器
+        download_gallery_task(url, mode, task_id, logger=logger)
     except Exception as e:
         error_msg = str(e)
         if "cancelled by user" in error_msg:
@@ -552,6 +473,158 @@ def download_task(url, mode, task_id, logger=None):
                     tasks[task_id].error = str(e)
             # 更新数据库状态
             task_db.update_task(task_id, status="错误", error=str(e))
+
+def post_download_processing(dl, gmetadata, task_id, logger=None, is_nhentai=False):
+    try:
+        # 检查是否被取消
+        check_task_cancelled(task_id)
+
+        if not dl:
+            return None
+
+        # 设置映射目录路径
+        if 'real_download_dir' in app.config:
+            ml = os.path.join(app.config['real_download_dir'], os.path.basename(dl))
+        else:
+            ml = dl
+
+        # 创建 ComicInfo.xml 并转换为 CBZ
+        metadata = parse_gmetadata(gmetadata)
+        if metadata.get('Writer') or metadata.get('Tags'):
+            cbz = nfotool.write_xml_to_zip(dl, ml, metadata, app=app, logger=logger)
+            if cbz and is_valid_zip(cbz):
+                dl = cbz
+            else:
+                return None
+
+        # 检查是否被取消
+        check_task_cancelled(task_id)
+
+        # 将文件移动到 Komga 媒体库
+        if app.config['komga_toggle'] and os.path.basename(dl).lower().endswith(".cbz"):
+            if app.config['komga_library_dir']:
+                library_path = app.config['komga_library_dir']
+
+                if is_nhentai:
+                    # 对于 nhentai，使用艺术家作为目录
+                    artist = metadata.get('Writer', 'Unknown Artist')
+                    series = app.config['komga_oneshot']
+                    destination = os.path.join(library_path, artist, series)
+                else:
+                    # 对于 ehentai，根据系列标签决定目录结构
+                    if 'Series' in metadata:
+                        series = metadata['Series']
+                    else:
+                        series = app.config['komga_oneshot']
+                    destination = os.path.join(library_path, metadata['Penciller'], series)
+
+                if logger: logger.info(f"开始移动到 Komga: {dl} ==> {destination}")
+                result = shutil.move(dl, check_dirs(destination))
+                if logger: logger.info("移动完毕")
+
+                kmg = komga.KomgaAPI(server=app.config['komga_server'], token=app.config['komga_token'], logger=logger)
+                if app.config['komga_library_id']:
+                    kmg.scan_library(app.config['komga_library_id'])
+
+        return dl
+
+    except Exception as e:
+        if logger: logger.error(f"Post-download processing failed: {e}")
+        raise e
+
+def download_gallery_task(url, mode, task_id, logger=None):
+    try:
+        # 检查是否被取消
+        check_task_cancelled(task_id)
+
+        # 判断平台
+        is_nhentai = 'nhentai.net' in url
+
+        if is_nhentai:
+            gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('nhentai_cookie'), logger=logger)
+        else:
+            gallery_tool = ehentai.EHentaiTools(cookie=app.config.get('eh_cookie'), logger=logger)
+
+        # 获取画廊元数据
+        gmetadata = gallery_tool.get_gmetadata(url)
+        if not gmetadata or 'gid' not in gmetadata:
+            raise ValueError("Failed to retrieve valid gmetadata for the given URL.")
+        # 获取标题
+        if 'title_jpn' in gmetadata and gmetadata['title_jpn'] != None:
+            title = html.unescape(gmetadata['title_jpn'])
+        else:
+            title = html.unescape(gmetadata['title'])
+        filename = f"{sanitize_filename(title)} [{gmetadata['gid']}]"
+        if not is_nhentai:
+            filename += ".zip"
+
+        if logger: logger.info(f"准备下载: {filename}")
+
+        # 更新内存和数据库任务信息
+        with tasks_lock:
+            if task_id in tasks:
+                tasks[task_id].filename = title
+        task_db.update_task(task_id, filename=filename)
+
+        check_task_cancelled(task_id)
+
+        # 下载路径
+        download_dir = './data/download/nhentai' if is_nhentai else './data/download/ehentai'
+        path = os.path.join(os.path.abspath(check_dirs(download_dir)), filename)
+
+        dl = None
+        if is_nhentai:
+            # nhentai 直接下载
+            dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
+        else:
+            # ehentai 下载模式选择
+            eh_mode = get_eh_mode(app.config, mode)
+            result = gallery_tool.archive_download(url=url, mode=eh_mode)
+
+            check_task_cancelled(task_id)
+
+            if result:
+                if result[0] == 'torrent':
+                    dl = send_to_aria2(torrent=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
+                    if dl is None:
+                        # 死种尝试 archive
+                        result = gallery_tool.archive_download(url=url, mode='archive')
+                elif result[0] == 'archive':
+                    if not app.config['aria2_toggle']:
+                        dl = gallery_tool._download(
+                            url=result[1],
+                            path=path,
+                            task_id=task_id,
+                            tasks=tasks,
+                            tasks_lock=tasks_lock
+                        )
+                    else:
+                        dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
+
+        check_task_cancelled(task_id)
+
+        # 统一后处理
+        final_path = post_download_processing(dl, gmetadata, task_id, logger, is_nhentai=is_nhentai)
+
+        if final_path and is_valid_zip(final_path):
+            if logger: logger.info(f"Task {task_id} completed successfully.")
+            with tasks_lock:
+                if task_id in tasks:
+                    tasks[task_id].status = "完成"
+
+            task_db.update_task(task_id, status="完成")
+            return True
+        else:
+            raise ValueError("Downloaded file is not a valid zip archive.")
+
+    except Exception as e:
+        if logger: logger.error(f"Download failed: {e}")
+        with tasks_lock:
+            if task_id in tasks:
+                tasks[task_id].status = "错误"
+                tasks[task_id].error = str(e)
+        task_db.update_task(task_id, status="错误", error=str(e))
+        raise e
 
 @app.route('/api/download', methods=['GET'])
 def download_url():
@@ -686,6 +759,7 @@ def get_config():
     # 添加状态信息
     config_data['status'] = {
         'hath_toggle': bool(app.config.get('hath_toggle', False)),
+        'nh_toggle': bool(app.config.get('nh_toggle', False)),
         'aria2_toggle': bool(app.config.get('aria2_toggle', False)),
         'komga_toggle': bool(app.config.get('komga_toggle', False)),
     }

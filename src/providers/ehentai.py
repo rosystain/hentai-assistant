@@ -9,63 +9,6 @@ headers = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
 }
 
-def extract_parody(text, translator):
-    # 匹配末尾是 () [后缀] 的情况，提取 () 内内容
-    match = re.search(r'\(([^)]+)\)\s*\[.*\]\s*$', text)
-    if match:
-        parody = match.group(1).strip()
-    else:
-        # 匹配末尾直接是 () 的情况
-        match = re.search(r'\(([^)]+)\)\s*$', text)
-        parody = match.group(1).strip().lower() if match else None
-
-    if parody:
-        # 拆分日文顿号并去掉每个部分前后空格
-        if '、' in parody:
-            parts = [part.strip() for part in parody.split('、')]
-            # 分别翻译
-            translated_parts = [translator.get_translation(part.strip(), 'parody') for part in parts]
-            parody_translated = ', '.join(translated_parts)
-        else:
-            parody_translated = translator.get_translation(parody.strip(), 'parody')
-        return parody_translated
-    return None
-
-def parse_filename(text, translator):
-    # 去除所有括号内的内容, 将清理后的文本作为标题
-    title = re.sub(r'\[.*?\]|\(.*?\)', '', text).strip()
-    print(f'从文件名{text}中解析到 Title:', title)
-    # 匹配第一个活动号 (Cxxx)
-    match_c = re.search(r'\(C\d+\)', text)
-    if match_c:
-        # 活动号后的文本
-        after_c = text[match_c.end():].strip()
-    else:
-        # 没有活动号，就从头开始
-        after_c = text
-    # 取最后一个括号里的内容为原作信息
-    parody = extract_parody(after_c, translator)
-    # 匹配开头[]内的内容,在EH的命名规范中,它总是代表作者信息
-    search_author = re.search(r'\[(.+?)\]', after_c)
-    if not search_author == None:
-        search_writer = re.search(r'(.+?)\s*\((.+?)\)', search_author.group(1))
-        # 判断作者和画师
-        if not search_writer == None:
-            writer = search_writer.group(1) # 同人志的情况下，把社团视为 writer
-            penciller = search_writer.group(2) # 把该漫画的作者视为 penciller
-        else:
-            writer = penciller = search_author.group(1)
-        # 有时候也会在作者信息中著名原著作者, 尝试去分离信息, 并将原著作者与社团共同视为 writer
-        for s in [ '、', ',']:
-            if s in penciller:
-                writer = writer + ', ' + penciller.split(s)[0]
-                print('\nWriter:', writer)
-                penciller = penciller.split(s)[1]
-                print('Penciller:', penciller)
-        return title, writer, penciller, parody
-    else:
-        return title, None, None, parody
-
 def get_original_tag(text):
     dictpath = check_dirs('data/ehentai/translations/')
     if os.path.isfile(dictpath + 'tags.json'):
@@ -77,7 +20,6 @@ def get_original_tag(text):
         return tagsdict[text]
     else:
         print('未找到词条,搜索在线内容')
-        global headers
         url = 'https://ehwiki.org/wiki/' + text.replace(' ','_')
         response = requests.get(url, headers=headers)
         searchJapanese = re.search(r'Japanese</b>:\s*(.+?)<', response.text)
@@ -95,7 +37,6 @@ def male_only_taglist():
     m_list = []
     if not os.path.exists("data/ehentai/fetish_listing.html"):
         url = "https://ehwiki.org/wiki/Fetish_Listing"
-        global headers
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             with open("data/ehentai/fetish_listing.html", 'w') as f:
@@ -116,8 +57,6 @@ class EHentaiTools:
         self.cookie = cookie
         self.logger = logger
         self.session = requests.Session()
-        # 设置全局的 headers
-        global headers
         self.session.headers.update(headers)
         self.session.cookies.update(cookie)
 
@@ -201,11 +140,12 @@ class EHentaiTools:
                                 task = tasks.get(task_id)
                                 if task and task.cancelled:
                                     if self.logger:
-                                        self.logger.info(f"任务 {task_id} 被用户取消")
+                                        self.logger.info(f"任务 {task_id} 被用户取消，正在清理文件")
                                     # 删除已下载的文件
                                     if os.path.exists(path):
                                         os.remove(path)
-                                    raise Exception("Task was cancelled by user")
+                                    # 返回None而不是抛出异常，避免中断线程
+                                    return None
 
                         if chunk:
                             f.write(chunk)

@@ -20,6 +20,7 @@
           <div v-else class="status-section">
             <h2>服务状态</h2>
             <p>E-Hentai: <span :class="statusClass((section.data as ConfigStatus).hath_toggle)">{{ statusText((section.data as ConfigStatus).hath_toggle) }}</span></p>
+            <p>NHentai: <span :class="statusClass((section.data as ConfigStatus).nh_toggle)">{{ statusText((section.data as ConfigStatus).nh_toggle) }}</span></p>
             <p>Aria2: <span :class="statusClass((section.data as ConfigStatus).aria2_toggle)">{{ statusText((section.data as ConfigStatus).aria2_toggle) }}</span></p>
             <p>Komga: <span :class="statusClass((section.data as ConfigStatus).komga_toggle)">{{ statusText((section.data as ConfigStatus).komga_toggle) }}</span></p>
           </div>
@@ -53,6 +54,7 @@ interface ConfigSection {
 
 interface ConfigStatus {
   hath_toggle: boolean;
+  nh_toggle: boolean;
   aria2_toggle: boolean;
   komga_toggle: boolean;
 }

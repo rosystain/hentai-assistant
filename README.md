@@ -1,6 +1,6 @@
 # Hentai Assistant
 
-一个全功能的EHentai下载助手，支持多种下载方式和自动化管理。
+一个全功能的EHentai/NHentai下载助手，支持多种下载方式和自动化管理。
 
 ## 功能特性
 
@@ -79,13 +79,15 @@ docker run -d \
 配置文件位于 `data/config.ini`，包含以下主要部分：
 
 - **general**: 通用设置（下载选项、标签翻译等）
-- **ehentai**: E-Hentai相关设置（Cookie、下载模式）
+- **ehentai**: E-Hentai相关设置（Cookie）
+- **nhentai**: NHentai相关设置（Cookie）
 - **aria2**: Aria2 RPC设置（可选）
 - **komga**: Komga API设置（可选）
 
 ### 必需配置
 
 1. **E-Hentai Cookie**: 用于访问exhentai内容
+2. **NHentai Cookie**: 用于访问nhentai内容
 
 ### 可选配置
 
@@ -105,6 +107,9 @@ tags_translation=true
 
 [ehentai]
 cookie="ipb_member_id=1234567; ipb_pass_hash=abcdef123456;"
+
+[nhentai]
+cookie=""
 
 [aria2]
 enable=false
