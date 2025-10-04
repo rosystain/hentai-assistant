@@ -29,7 +29,7 @@ class File_nhentai(File):
     format = 'page:04;'
 
 class Info:
-    def __init__(self, host, id, id_media, title, title_jpn, p, artists, groups, series, tags, lang, category, formats):
+    def __init__(self, host, id, id_media, title, title_jpn, p, artists, groups, series, characters, tags, lang, category, formats):
         self.host = host
         self.id = id
         self.id_media = id_media
@@ -39,6 +39,7 @@ class Info:
         self.artists = artists
         self.groups = groups
         self.series = series
+        self.characters = characters
         self.tags = tags
         self.lang = lang
         self.category = category
@@ -51,7 +52,7 @@ def format_filename(site, data, ext):
     return filename
 
 # nhentai域名列表，用于尝试不同的CDN域名
-NHENTAI_DOMAINS = ['', '1', '2', '3', '5', '7']
+NHENTAI_DOMAINS = ['', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 
 def build_nhentai_image_urls(media_id, page_num, ext):
     return [f'https://i{domain_num}.nhentai.net/galleries/{media_id}/{page_num}.{ext}' for domain_num in NHENTAI_DOMAINS]
@@ -73,7 +74,7 @@ def _parse_gallery(gal):
     images = gal.get('images', {})
     pages = images.get('pages', []) if images else []
     p = len(pages)
-    artists, groups, series, tags = [], [], [], []
+    artists, groups, series, characters, tags = [], [], [], [], []
     lang = category = None
     tags_list = gal.get('tags') or []
     for tag in tags_list:
@@ -86,6 +87,8 @@ def _parse_gallery(gal):
             groups.append(name)
         elif tag_type == 'parody':
             series.append(tag['name'])
+        elif tag_type == 'character':
+            characters.append(tag['name'])
         elif tag_type == 'language':
             lang = tag['name']
         elif tag_type == 'category':
@@ -93,7 +96,7 @@ def _parse_gallery(gal):
         elif tag_type == 'tag':
             tags.append(tag['name'])
     formats = [{'j':'jpg', 'p':'png', 'g':'gif', 'w':'webp'}.get(img['t'], 'jpg') for img in pages]
-    return Info(host, id, id_media, title, title_jpn, p, artists, groups, series, tags, lang, category, formats)
+    return Info(host, id, id_media, title, title_jpn, p, artists, groups, series, characters, tags, lang, category, formats)
 
 @try_n(3)
 def get_info(id, session):
@@ -256,6 +259,8 @@ class NHentaiTools:
                 metadata['tags'].append(f"group:{group}")
             for serie in info.series:
                 metadata['tags'].append(f"parody:{serie}")
+            for character in info.characters:
+                metadata['tags'].append(f"character:{character}")
             for tag in info.tags:
                 metadata['tags'].append(f"tag:{tag}")
             if info.lang:
