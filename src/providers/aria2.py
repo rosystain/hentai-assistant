@@ -16,7 +16,7 @@ class Aria2RPC:
         payload = {'jsonrpc':'2.0', 'id':self.id, 'method':method, 'params':[f'token:{self.token}']}
         if params: payload['params'].extend(params)
         #print(params)
-        response = requests.post(self.url, headers=self.headers, data = json.dumps(payload), timeout=10)
+        response = requests.post(self.url, headers=self.headers, data = json.dumps(payload), timeout=60)
         return response.json()
 
     def add_uri(self, uri, dir=None, out=None):
@@ -147,7 +147,7 @@ class Aria2RPC:
             else:
                 time.sleep(5)
 
-            if status == 'removed':
+            if status in ['removed', 'error']:
                 if logger:
                     logger.info("Download cancelled.")
                 return None
