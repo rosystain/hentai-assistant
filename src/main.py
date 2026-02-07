@@ -765,7 +765,8 @@ def post_download_processing(dl, metadata, task_id, logger=None, tasks=None, tas
                 'storyarcnumber': 'StoryArcNumber',
                 'seriesgroup': 'SeriesGroup',
                 'coverartist':'CoverArtist',
-                'gtin': 'GTIN'
+                'gtin': 'GTIN',
+                'number': 'Number'
             }
 
             for key, value_template in comicinfo_config.items():

@@ -76,7 +76,7 @@
 import { ref, onMounted, computed } from 'vue';
 import axios from 'axios';
 import { useTheme } from '@/composables/useTheme';
-import { getFieldLabel, getFieldDescription, getSectionLabel } from '@/config-labels';
+import { getFieldLabel, getFieldDescription, getSectionLabel, configLabels } from '@/config-labels';
 
 interface ConfigItem {
   [key: string]: string;
@@ -237,13 +237,26 @@ const orderedConfigSections = computed(() => {
   return Object.entries(config.value)
     .filter(([name]) => name !== 'status' && name !== 'notification')
     .map(([name, data]) => {
+      // 获取 configLabels 中该 section 的字段定义顺序
+      const sectionLabels = configLabels[name];
+      const labelOrder = sectionLabels ? Object.keys(sectionLabels) : [];
+      
+      // 按照 configLabels 中定义的顺序排序字段
+      const sortedFields = Object.entries(data as ConfigItem)
+        .map(([key, value]) => ({ key, value }))
+        .sort((a, b) => {
+          const indexA = labelOrder.indexOf(a.key);
+          const indexB = labelOrder.indexOf(b.key);
+          // 如果字段不在 labelOrder 中，放到最后
+          const orderA = indexA === -1 ? Infinity : indexA;
+          const orderB = indexB === -1 ? Infinity : indexB;
+          return orderA - orderB;
+        });
+      
       return {
         name,
         data,
-        orderedFields: Object.entries(data as ConfigItem).map(([key, value]) => ({
-          key,
-          value
-        }))
+        orderedFields: sortedFields
       }
     })
 });

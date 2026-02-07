@@ -219,51 +219,55 @@ export const configLabels: Record<string, Record<string, FieldLabel>> = {
     comicinfo: {
         title: {
             label: '标题',
-            description: 'ComicInfo.xml 中的标题字段模板'
+            description: 'Title - 系列标题'
         },
         writer: {
             label: '作者',
-            description: '作者字段模板'
+            description: 'Writer - 作者'
         },
         penciller: {
             label: '画师',
-            description: '画师字段模板'
+            description: 'Penciller - 画师'
         },
         translator: {
             label: '翻译者',
-            description: '翻译者字段模板'
+            description: 'Translator - 翻译者'
         },
         tags: {
             label: '标签',
-            description: '标签字段模板'
+            description: 'Tags - 标签'
         },
         web: {
             label: '来源链接',
-            description: '来源网址模板'
+            description: 'Web - 来源'
         },
         agerating: {
             label: '年龄分级',
-            description: '年龄分级模板'
+            description: 'AgeRating - 年龄分级'
         },
         manga: {
             label: '漫画类型',
-            description: '漫画类型模板'
+            description: 'Manga - 漫画阅读方向'
         },
         genre: {
             label: '类型',
-            description: '类型/流派模板'
+            description: 'Genre - 流派'
         },
         languageiso: {
             label: '语言代码',
-            description: 'ISO 语言代码模板'
+            description: 'LanguageISO - 语言'
+        },
+        number: {
+            label: '序号',
+            description: 'Number - 书籍序号'
         },
         alternateseries: {
             label: '系列名',
-            description: '系列名称模板'
+            description: 'AlternateSeries - 阅读列表标题，留空则不创建阅读列表'
         },
         alternatenumber: {
-            label: '系列编号',
-            description: '系列编号模板'
+            label: '系列序号',
+            description: 'AlternateNumber - 阅读列表中的序号'
         }
     }
 };
