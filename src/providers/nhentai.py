@@ -370,10 +370,6 @@ class NHentaiTools:
                 metadata['tags'].append(f"category:{info.category}")
             gmetadata = {"gmetadata": [metadata]}
             if self.logger: self.logger.info(gmetadata)
-            metadata_dir = check_dirs('data/nhentai/gmetadata/')
-            metadata_file = os.path.join(metadata_dir, f'{gallery_id}.json')
-            with open(metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(gmetadata, f, ensure_ascii=False, indent=4)
             return metadata
         except Exception as e:
             return None

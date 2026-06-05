@@ -1,6 +1,7 @@
 import sqlite3
 import threading
 import os
+import json
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
@@ -47,6 +48,15 @@ class TaskDatabase:
                     speed INTEGER DEFAULT 0,
                     url TEXT,
                     mode TEXT,
+                    metadata TEXT,
+                    comicinfo TEXT,
+                    output_path TEXT,
+                    target_path TEXT,
+                    pending_changes TEXT,
+                    repack_status TEXT,
+                    move_status TEXT,
+                    last_error TEXT,
+                    cover_url TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
@@ -60,12 +70,40 @@ class TaskDatabase:
                 )
             ''')
 
-            # 检查已存在表的字段
+            # 检查 tasks 表的字段
             cursor = conn.execute("PRAGMA table_info(tasks)")
             columns = [row[1] for row in cursor.fetchall()]
 
+            # 字段重命名迁移：将 metadata_raw 改为 metadata，将 metadata_final 改为 comicinfo
+            try:
+                if 'metadata_raw' in columns and 'metadata' not in columns:
+                    conn.execute("ALTER TABLE tasks RENAME COLUMN metadata_raw TO metadata")
+                    columns.remove('metadata_raw')
+                    columns.append('metadata')
+                if 'metadata_final' in columns and 'comicinfo' not in columns:
+                    conn.execute("ALTER TABLE tasks RENAME COLUMN metadata_final TO comicinfo")
+                    columns.remove('metadata_final')
+                    columns.append('comicinfo')
+            except sqlite3.Error as e:
+                import logging
+                logging.error(f"Error renaming metadata columns: {e}")
+
             # 如果表已存在但缺少新字段，添加它们
-            for col in ("url", "mode", "favcat", "normalized_url"):
+            for col in (
+                "url",
+                "mode",
+                "favcat",
+                "normalized_url",
+                "metadata",
+                "comicinfo",
+                "output_path",
+                "target_path",
+                "pending_changes",
+                "repack_status",
+                "move_status",
+                "last_error",
+                "cover_url"
+            ):
                 if col not in columns:
                     conn.execute(f'ALTER TABLE tasks ADD COLUMN {col} TEXT')
 
@@ -84,6 +122,24 @@ class TaskDatabase:
                     conn.execute('UPDATE tasks SET normalized_url = ? WHERE id = ?', (normalized_url, task_id))
                 except Exception:
                     pass  # 跳过无法规范化的 URL
+
+            # 迁移旧的封面 URL 到本地路由
+            try:
+                cursor = conn.execute("SELECT id, cover_url FROM tasks WHERE cover_url LIKE 'http%'")
+                rows = cursor.fetchall()
+                if rows:
+                    for task_id, cover_url in rows:
+                        import os
+                        ext = ".jpg"
+                        if cover_url and cover_url.lower().endswith(('.png', '.webp', '.jpeg', '.gif', '.jpg')):
+                            ext = os.path.splitext(cover_url.split('?')[0])[1].lower()
+                        new_cover_url = f"/api/covers/{task_id}{ext}"
+                        conn.execute("UPDATE tasks SET cover_url = ? WHERE id = ?", (new_cover_url, task_id))
+                    import logging
+                    logging.info(f"Migrated {len(rows)} old cover URLs to local routes.")
+            except Exception as e:
+                import logging
+                logging.error(f"Error migrating cover URLs: {e}")
 
             conn.commit()
 
@@ -155,7 +211,12 @@ class TaskDatabase:
 
     def add_task(self, task_id: str, status: str = TaskStatus.IN_PROGRESS,
                  filename: Optional[str] = None, error: Optional[str] = None,
-                 url: Optional[str] = None, mode: Optional[str] = None, favcat: Optional[str] = None) -> bool:
+                 url: Optional[str] = None, mode: Optional[str] = None, favcat: Optional[str] = None,
+                 metadata: Optional[Dict] = None, comicinfo: Optional[Dict] = None,
+                 output_path: Optional[str] = None, target_path: Optional[str] = None,
+                 pending_changes: Optional[Dict] = None, repack_status: Optional[str] = None,
+                 move_status: Optional[str] = None, last_error: Optional[str] = None,
+                 cover_url: Optional[str] = None) -> bool:
         """添加新任务"""
         status = self.STATUS_MAP.get(status, status)
         # 计算 normalized_url
@@ -172,9 +233,32 @@ class TaskDatabase:
                     now = datetime.now(timezone.utc).isoformat()
                     conn.execute('''
                         INSERT OR REPLACE INTO tasks
-                        (id, status, filename, error, url, mode, favcat, normalized_url, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (task_id, status, filename, error, url, mode, favcat, normalized_url, now, now))
+                        (id, status, filename, error, url, mode, favcat, normalized_url,
+                         metadata, comicinfo, output_path, target_path,
+                         pending_changes, repack_status, move_status, last_error, cover_url,
+                         created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        task_id,
+                        status,
+                        filename,
+                        error,
+                        url,
+                        mode,
+                        favcat,
+                        normalized_url,
+                        self._serialize_json(metadata),
+                        self._serialize_json(comicinfo),
+                        output_path,
+                        target_path,
+                        self._serialize_json(pending_changes),
+                        repack_status,
+                        move_status,
+                        last_error,
+                        cover_url,
+                        now,
+                        now
+                    ))
                     conn.commit()
                 return True
             except sqlite3.Error as e:
@@ -184,7 +268,12 @@ class TaskDatabase:
     def update_task(self, task_id: str, status: Optional[str] = None, error: Optional[str] = None,
                     log: Optional[str] = None, filename: Optional[str] = None, progress: Optional[int] = None,
                     downloaded: Optional[int] = None, total_size: Optional[int] = None, speed: Optional[int] = None,
-                    url: Optional[str] = None, mode: Optional[str] = None, favcat: Optional[str] = None) -> bool:
+                    url: Optional[str] = None, mode: Optional[str] = None, favcat: Optional[str] = None,
+                    metadata: Optional[Dict] = None, comicinfo: Optional[Dict] = None,
+                    output_path: Optional[str] = None, target_path: Optional[str] = None,
+                    pending_changes: Optional[Dict] = None, repack_status: Optional[str] = None,
+                    move_status: Optional[str] = None, last_error: Optional[str] = None,
+                    cover_url: Optional[str] = None) -> bool:
         """更新任务信息"""
         with self.lock:
             try:
@@ -225,6 +314,33 @@ class TaskDatabase:
                     if favcat is not None:
                         updates.append("favcat = ?")
                         params.append(favcat)
+                    if metadata is not None:
+                        updates.append("metadata = ?")
+                        params.append(self._serialize_json(metadata))
+                    if comicinfo is not None:
+                        updates.append("comicinfo = ?")
+                        params.append(self._serialize_json(comicinfo))
+                    if output_path is not None:
+                        updates.append("output_path = ?")
+                        params.append(output_path)
+                    if target_path is not None:
+                        updates.append("target_path = ?")
+                        params.append(target_path)
+                    if pending_changes is not None:
+                        updates.append("pending_changes = ?")
+                        params.append(self._serialize_json(pending_changes))
+                    if repack_status is not None:
+                        updates.append("repack_status = ?")
+                        params.append(repack_status)
+                    if move_status is not None:
+                        updates.append("move_status = ?")
+                        params.append(move_status)
+                    if last_error is not None:
+                        updates.append("last_error = ?")
+                        params.append(last_error)
+                    if cover_url is not None:
+                        updates.append("cover_url = ?")
+                        params.append(cover_url)
 
                     if updates:
                         updates.append("updated_at = ?")
@@ -247,7 +363,7 @@ class TaskDatabase:
                     conn.row_factory = sqlite3.Row
                     cursor = conn.execute('SELECT * FROM tasks WHERE id = ?', (task_id,))
                     row = cursor.fetchone()
-                    return dict(row) if row else None
+                    return self._deserialize_task(dict(row)) if row else None
             except sqlite3.Error as e:
                 print(f"Database error getting task: {e}")
                 return None
@@ -278,7 +394,7 @@ class TaskDatabase:
                     ''', (normalized_url, TaskStatus.IN_PROGRESS, TaskStatus.COMPLETED, 
                           TaskStatus.CANCELLED, TaskStatus.ERROR))
                     row = cursor.fetchone()
-                    return dict(row) if row else None
+                    return self._deserialize_task(dict(row)) if row else None
             except sqlite3.Error as e:
                 print(f"Database error getting task by normalized URL: {e}")
                 return None
@@ -314,7 +430,7 @@ class TaskDatabase:
                     params.extend([page_size, offset])
 
                     cursor = conn.execute(data_query, params)
-                    tasks = [dict(row) for row in cursor.fetchall()]
+                    tasks = [self._deserialize_task(dict(row)) for row in cursor.fetchall()]
 
                     return tasks, total
             except sqlite3.Error as e:
@@ -362,8 +478,10 @@ class TaskDatabase:
                         conn.execute('''
                             INSERT OR REPLACE INTO tasks
                             (id, status, error, log, filename, progress, downloaded,
-                             total_size, speed, url, mode, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             total_size, speed, url, mode, metadata, comicinfo,
+                             output_path, target_path, pending_changes, repack_status,
+                             move_status, last_error, cover_url, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ''', (
                             task_id,
                             self.STATUS_MAP.get(task_info.status, task_info.status),
@@ -376,6 +494,15 @@ class TaskDatabase:
                             task_info.speed,
                             getattr(task_info, "url", None),
                             getattr(task_info, "mode", None),
+                            self._serialize_json(getattr(task_info, "metadata", None)),
+                            self._serialize_json(getattr(task_info, "comicinfo", None)),
+                            getattr(task_info, "output_path", None),
+                            getattr(task_info, "target_path", None),
+                            self._serialize_json(getattr(task_info, "pending_changes", None)),
+                            getattr(task_info, "repack_status", None),
+                            getattr(task_info, "move_status", None),
+                            getattr(task_info, "last_error", None),
+                            getattr(task_info, "cover_url", None),
                             now,
                             now
                         ))
@@ -384,6 +511,23 @@ class TaskDatabase:
             except sqlite3.Error as e:
                 print(f"Database error migrating tasks: {e}")
                 return False
+
+    def _serialize_json(self, value):
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        return value
+
+    def _deserialize_task(self, task: Dict) -> Dict:
+        for key in ("metadata", "comicinfo", "pending_changes"):
+            value = task.get(key)
+            if isinstance(value, str) and value:
+                try:
+                    task[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    pass
+        return task
 
 
     def set_global_state(self, key: str, value: str) -> bool:

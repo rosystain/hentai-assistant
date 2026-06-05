@@ -718,145 +718,125 @@ def try_fallback_download(gmetadata, logger=None):
 
     return None, None
 
-def post_download_processing(dl, metadata, task_id, logger=None, tasks=None, tasks_lock=None):
+def prepare_metadata_and_path(metadata, filename, app, logger=None):
+    comicinfo_metadata = {}
+    move_file_path = None
+    
+    if metadata.get('Writer') or metadata.get('Tags'):
+        template_vars = {k.lower(): v for k, v in metadata.items()}
+        template_vars['filename'] = filename
+        
+        def finalize_none(value):
+            return "" if value is None else value
+        
+        jinja_env = jinja2.Environment(finalize=finalize_none)
+
+        def render_template(template_string):
+            try:
+                template = jinja_env.from_string(template_string)
+                rendered_value = template.render(template_vars)
+                return rendered_value if rendered_value else None
+            except Exception as e:
+                (logger.warning if logger else print)(f"Jinja2 模板渲染失败: {e}")
+                return None
+
+        comicinfo_config = app.config.get('COMICINFO', {}) or {}
+        key_map = {
+            'agerating': 'AgeRating',
+            'languageiso': 'LanguageISO',
+            'alternateseries': 'AlternateSeries',
+            'alternatenumber': 'AlternateNumber',
+            'storyarc': 'StoryArc',
+            'storyarcnumber': 'StoryArcNumber',
+            'seriesgroup': 'SeriesGroup',
+            'coverartist':'CoverArtist',
+            'gtin': 'GTIN',
+            'number': 'Number'
+        }
+
+        for key, value_template in comicinfo_config.items():
+            if isinstance(value_template, str) and value_template:
+                formatted_value = render_template(value_template)
+                if formatted_value is not None:
+                    camel_key = key_map.get(key, key.capitalize())
+                    comicinfo_metadata[camel_key] = formatted_value
+        if logger: logger.info(f"生成的 ComicInfo 元数据: {comicinfo_metadata}")
+
+        template_vars['author'] = metadata.get('Penciller') or metadata.get('Writer') or None
+        template_vars['series'] = metadata.get('Series') or None
+
+        tags = metadata.get('Tags', '').lower()
+        limit = 2 if 'anthology' in [tag.strip() for tag in tags.split(',')] else 3
+
+        for key in ('penciller', 'writer'):
+            value = template_vars.get(key)
+            if value and isinstance(value, str) and len([item for item in value.split(',') if item.strip()]) >= limit:
+                template_vars[key] = 'anthology'
+
+        template_vars['author'] = template_vars.get('penciller') or template_vars.get('writer') or None
+
+        move_path_template = app.config.get('MOVE_PATH')
+        if move_path_template:
+            class UnknownUndefined(jinja2.Undefined):
+                def __str__(self):
+                    return 'Unknown'
+            
+            def finalize_for_path(value):
+                return value if value else 'Unknown'
+
+            jinja_env_for_path = jinja2.Environment(
+                undefined=UnknownUndefined,
+                finalize=finalize_for_path
+            )
+            
+            try:
+                path_template = jinja_env_for_path.from_string(move_path_template)
+                move_file_path = path_template.render(template_vars)
+                if not move_file_path:
+                    (logger.warning if logger else print)(f"移动路径模板渲染结果为空, 回退到默认目录")
+                    move_file_path = None
+                else:
+                    template_has_filename = '{{filename}}' in move_path_template
+                    if template_has_filename:
+                        if not os.path.splitext(move_file_path)[1].lower() in ['.7z', '.zip', '.cbz']:
+                            move_file_path += '.cbz'
+            except Exception as e:
+                (logger.warning if logger else print)(f"移动路径模板渲染失败: {e}, 回退到默认目录")
+                move_file_path = None
+
+    return comicinfo_metadata, move_file_path
+
+def finalize_downloaded_file(dl, comicinfo_metadata, move_file_path, task_id, app, logger=None, tasks=None, tasks_lock=None):
     try:
-        # 检查是否被取消
         check_task_cancelled(task_id, tasks, tasks_lock)
-
         if not dl:
-            return None, None
+            return None
 
-        # 创建 ComicInfo.xml 并转换为 CBZ
-        # 确保 comicinfo_metadata 在任何分支中都有定义，避免未绑定变量
-        comicinfo_metadata = {}
-        if metadata.get('Writer') or metadata.get('Tags'):
-            # 准备一个包含所有可用字段的字典，用于格式化
-            template_vars = {k.lower(): v for k, v in metadata.items()}
-            template_vars['filename'] = os.path.basename(dl)
-            
-            def finalize_none(value):
-                return "" if value is None else value
-            
-            jinja_env = jinja2.Environment(finalize=finalize_none)
+        if not move_file_path:
+            move_file_path = os.path.dirname(dl)
 
-            def render_template(template_string):
-                try:
-                    template = jinja_env.from_string(template_string)
-                    rendered_value = template.render(template_vars)
-                    # 如果渲染结果是空字符串，也当作 None 处理
-                    return rendered_value if rendered_value else None
-                except Exception as e:
-                    (logger.warning if logger else print)(f"Jinja2 模板渲染失败: {e}")
-                    # 任何渲染失败都直接返回 None
-                    return None
+        if not os.path.basename(move_file_path).lower().endswith(('.7z', '.zip', '.cbz')):
+            move_file_path = os.path.join(move_file_path, os.path.basename(dl))
 
-            # 根据 comicinfo 配置生成新的 metadata
-            comicinfo_metadata = {}
-            comicinfo_config = app.config.get('COMICINFO', {}) or {}
+        cbz = cbztool.write_xml_to_zip(dl, comicinfo_metadata, app=app, logger=logger)
+        if cbz and is_valid_zip(cbz):
+            move_file_path = os.path.splitext(move_file_path)[0] + '.cbz'
+            os.makedirs(os.path.dirname(move_file_path), exist_ok=True)
+            shutil.move(cbz, move_file_path)
+            if logger: logger.info(f"文件移动到指定目录: {move_file_path}")
+            dl = move_file_path
+        else:
+            return None
 
-            # 定义一个从 config.yaml 中的小写键到 ComicInfo.xml 驼峰键的映射
-            # 只需映射多单词复合词，单个单词会通过 key.capitalize() 自动处理
-            key_map = {
-                'agerating': 'AgeRating',
-                'languageiso': 'LanguageISO',
-                'alternateseries': 'AlternateSeries',
-                'alternatenumber': 'AlternateNumber',
-                'storyarc': 'StoryArc',
-                'storyarcnumber': 'StoryArcNumber',
-                'seriesgroup': 'SeriesGroup',
-                'coverartist':'CoverArtist',
-                'gtin': 'GTIN',
-                'number': 'Number'
-            }
-
-            for key, value_template in comicinfo_config.items():
-                if isinstance(value_template, str) and value_template:
-                    formatted_value = render_template(value_template)
-                    # 只有当格式化后的值不是 None 时才添加
-                    if formatted_value is not None:
-                        # 使用映射转换键, 如果键在映射中不存在, 则默认将其首字母大写
-                        camel_key = key_map.get(key, key.capitalize())
-                        comicinfo_metadata[camel_key] = formatted_value
-            if logger: logger.info(f"生成的 ComicInfo 元数据: {comicinfo_metadata}")
-
-            # 用于渲染路径的变量无法接受 None 值，因此在 comicinfo_metadata 完成之后，再添加回退机制
-            template_vars['author'] = metadata.get('Penciller') or metadata.get('Writer') or None
-            template_vars['series'] = metadata.get('Series') or None
-
-            # 如果标签中包含 anthology，则将作者/画师数量限制调整为2
-            tags = metadata.get('Tags', '').lower()
-            limit = 2 if 'anthology' in [tag.strip() for tag in tags.split(',')] else 3
-
-            # 为路径渲染限制作者/画师数量，避免路径过长
-            for key in ('penciller', 'writer'):
-                value = template_vars.get(key)
-                if value and isinstance(value, str) and len([item for item in value.split(',') if item.strip()]) >= limit:
-                    template_vars[key] = 'anthology'
-
-            # 基于可能已修改的 penciller 和 writer 更新 author
-            template_vars['author'] = template_vars.get('penciller') or template_vars.get('writer') or None
-
-            move_path_template = app.config.get('MOVE_PATH')
-            if move_path_template:
-                # 为移动路径创建一个特殊的、健壮的 Jinja2 环境
-                class UnknownUndefined(jinja2.Undefined):
-                    def __str__(self):
-                        return 'Unknown'
-                
-                def finalize_for_path(value):
-                    # 此函数处理值为 None 或 "" 的情况
-                    return value if value else 'Unknown'
-
-                jinja_env_for_path = jinja2.Environment(
-                    undefined=UnknownUndefined, # 处理不存在的键
-                    finalize=finalize_for_path     # 处理 None 或 "" 的值
-                )
-                
-                try:
-                    path_template = jinja_env_for_path.from_string(move_path_template)
-                    move_file_path = path_template.render(template_vars)
-                    # 关键检查：处理渲染结果为空（例如模板是""）的情况
-                    if not move_file_path:
-                        (logger.warning if logger else print)(f"移动路径模板渲染结果为空, 回退到默认目录")
-                        move_file_path = os.path.dirname(dl)
-                    else:
-                        # 检查模板是否包含文件名变量
-                        template_has_filename = '{{filename}}' in move_path_template
-                        if template_has_filename:
-                            # 如果模板包含filename，确保有扩展名
-                            if not os.path.splitext(move_file_path)[1].lower() in ['.7z', '.zip', '.cbz']:
-                                move_file_path += '.cbz'
-                except Exception as e:
-                    (logger.warning if logger else print)(f"移动路径模板渲染失败: {e}, 回退到默认目录")
-                    move_file_path = os.path.dirname(dl)
-            else:
-                move_file_path = os.path.dirname(dl)
-
-            if not os.path.basename(move_file_path).lower().endswith(('.7z', '.zip', '.cbz')):
-                move_file_path = os.path.join(move_file_path, os.path.basename(dl))
-
-            cbz = cbztool.write_xml_to_zip(dl, comicinfo_metadata, app=app, logger=logger)
-            if cbz and is_valid_zip(cbz):
-                # 移动到指定目录（komga/lanraragi，可选）
-                move_file_path = os.path.splitext(move_file_path)[0] + '.cbz'
-                os.makedirs(os.path.dirname(move_file_path), exist_ok=True)
-                shutil.move(cbz, move_file_path)
-                (logger.info if logger else print)(f"文件移动到指定目录: {move_file_path}")
-                dl = move_file_path
-            else:
-                return None, None
-
-        # 检查是否被取消
         check_task_cancelled(task_id, tasks, tasks_lock)
 
-        # 触发 Komga 媒体库入库扫描
         if app.config['KOMGA_TOGGLE'] and is_valid_zip(dl):
             if app.config['KOMGA_LIBRARY_ID']:
                 kmg = komga.KomgaAPI(server=app.config['KOMGA_SERVER'], username=app.config['KOMGA_USERNAME'], password=app.config['KOMGA_PASSWORD'], logger=logger)
                 if app.config['KOMGA_LIBRARY_ID']:
                     kmg.scan_library(app.config['KOMGA_LIBRARY_ID'])
 
-        return dl, comicinfo_metadata
+        return dl
 
     except Exception as e:
         if logger: logger.error(f"Post-download processing failed: {e}")
@@ -934,6 +914,14 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
     
     if not gmetadata or 'gid' not in gmetadata:
         raise ValueError("Failed to retrieve valid gmetadata for the given URL.")
+
+    # 保存原始元数据与封面URL（假设存在，缺失时留空）
+    cover_url = None
+    if isinstance(gmetadata, dict):
+        raw_cover_url = gmetadata.get('thumb') or gmetadata.get('thumbnail_url')
+        from utils import download_cover
+        cover_url = download_cover(raw_cover_url, task_id, app.config, logger)
+    task_db.update_task(task_id, metadata=gmetadata, cover_url=cover_url)
     
     # 获取标题
     if gmetadata.get('title_jpn'):
@@ -961,6 +949,21 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
                 tasks[task_id].filename = title
     task_db.update_task(task_id, filename=filename)
 
+    # 【提前处理】元数据解析和路径计算
+    if metadata_extractor:
+        metadata = metadata_extractor.parse_gmetadata(gmetadata, logger=logger)
+    else:
+        metadata = {}
+    if not is_nhentai and not is_hitomi and not is_hdoujin and original_url != url:
+        metadata['Web'] = original_url.split('#')[0].split('?')[0]
+    else:
+        metadata['Web'] = url.split('#')[0].split('?')[0]
+
+    comicinfo_metadata, target_path = prepare_metadata_and_path(metadata, filename, app, logger)
+
+    # 提前将处理好的 comicinfo 和预期的 target_path 存入数据库，让前端能在下载中实时展示
+    task_db.update_task(task_id, target_path=target_path, comicinfo=comicinfo_metadata if comicinfo_metadata else {})
+
     check_task_cancelled(task_id, tasks, tasks_lock)
 
     # 下载路径
@@ -974,6 +977,18 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
         download_dir = './data/download/ehentai'
     path = os.path.join(os.path.abspath(check_dirs(download_dir)), filename)
 
+    # 提前预测并更新 output_path，以便在下载中途失败（抛出异常）时，用户依然能在前端将其删除清理
+    predicted_path = None
+    eh_mode = get_eh_mode(app.config, mode)
+    if is_nhentai or is_hitomi or is_hdoujin or original_url != url:
+        predicted_path = path
+    elif app.config.get('DOWNLOAD_FORMAT') == 'archive' or eh_mode == 'archive':
+        real_dir = app.config.get('REAL_DOWNLOAD_DIR') or '.'
+        predicted_path = os.path.join(real_dir, filename)
+    
+    if predicted_path:
+        task_db.update_task(task_id, output_path=predicted_path)
+
     dl = None
     # 对于非 E-Hentai 平台，直接下载
     if is_nhentai or is_hitomi or is_hdoujin or original_url != url:
@@ -983,7 +998,6 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
             raise ValueError("无法下载画廊，链接无效")
     else:
         # E-Hentai 下载模式选择
-        eh_mode = get_eh_mode(app.config, mode)
         # exhentai 限定的画廊在一些情况下能被 e-hentai 检索，但并不能通过 e-hentai 访问，因此当 exhentai 可用时，积极替换成 exhentai 的链接。
         if app.config.get('EXH_VALID'):
             url = url.replace("e-hentai.org", "exhentai.org")
@@ -1057,22 +1071,15 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
     # 检查是否被取消
     check_task_cancelled(task_id, tasks, tasks_lock)
 
-    # 处理元数据
-    if metadata_extractor:
-        metadata = metadata_extractor.parse_gmetadata(gmetadata, logger=logger)
-    else:
-        metadata = {}
-    if not is_nhentai and not is_hitomi and not is_hdoujin and original_url != url:
-        # 如果切换到了兜底下载，使用原始 ehentai 的 URL 作为 Web 字段
-        metadata['Web'] = original_url.split('#')[0].split('?')[0]
-    else:
-        metadata['Web'] = url.split('#')[0].split('?')[0]
+    if dl:
+        task_db.update_task(task_id, output_path=dl)
 
-    # 统一后处理
-    final_path, comicinfo_metadata = post_download_processing(dl, metadata, task_id, logger, tasks, tasks_lock)
+    # 统一后处理：封包和移动文件
+    final_path = finalize_downloaded_file(dl, comicinfo_metadata, target_path, task_id, app, logger, tasks, tasks_lock)
 
     # 验证处理结果
     if final_path and is_valid_zip(final_path):
+        task_db.update_task(task_id, output_path=final_path)
         
         if logger: logger.info(f"Task {task_id} completed successfully.")
         if tasks_lock:

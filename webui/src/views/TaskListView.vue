@@ -90,11 +90,122 @@
 
         <div class="task-cards" :key="taskListKey">
           <div v-for="task in paginatedTasks" :key="task.id" class="task-card">
-            <div class="task-header">
-              <h3 :title="task.filename || '未知文件名'">{{ formatFilename(task.filename) || '未知文件名' }}</h3>
-              <span :class="statusClass(task.status)">{{ statusText(task.status) }}</span>
+            <!-- 右上角更多操作菜单 -->
+            <div class="task-more-menu" v-if="task.status !== '进行中'">
+              <button class="more-btn" @click.stop="openMenuId = openMenuId === task.id ? null : task.id">⋮</button>
+              <div class="more-dropdown" v-show="openMenuId === task.id">
+                <button
+                  @click.stop="confirmDeleteTask(task); openMenuId = null;"
+                  :disabled="deletingTasks[task.id]"
+                  class="dropdown-item delete-text"
+                >
+                  {{ deletingTasks[task.id] ? '删除中...' : '🗑️ 删除任务' }}
+                </button>
+              </div>
             </div>
-            <p class="task-id-subtitle">任务ID: {{ task.id }}</p>
+
+            <!-- 封面 + 元数据两栏布局 -->
+            <div class="task-body" :class="{ 'has-cover': task.cover_url }">
+              <div v-if="task.cover_url" class="task-cover">
+                <img :src="task.cover_url" alt="cover" loading="lazy" />
+              </div>
+              <div class="task-info">
+                <h4 class="task-display-title" :title="task.filename || '未知文件名'">
+                  {{ formatFilename(task.filename) || '未知文件名' }}
+                </h4>
+                <p class="task-id-subtitle">
+                  任务ID: {{ task.id }}
+                  <span :class="['status-badge-inline', statusClass(task.status)]">{{ statusText(task.status) }}</span>
+                  <button v-if="task.output_path" class="path-button" :title="task.output_path" @click="copyPath(task.output_path)">
+                    📁 路径
+                  </button>
+                  <button v-if="task.metadata" class="path-button" title="点击复制原始元数据 JSON" @click="copyRawMetadata(task.metadata)">
+                    📄 元数据
+                  </button>
+                </p>
+                <div v-if="task.comicinfo && (task.comicinfo.Genre || task.comicinfo.LanguageISO || task.comicinfo.AgeRating || task.comicinfo.Translator)" class="task-capsules">
+                  <template v-if="task.comicinfo.LanguageISO">
+                    <span class="capsule capsule-lang" :title="task.comicinfo.LanguageISO">{{ getNativeLanguageName(task.comicinfo.LanguageISO) }}</span>
+                  </template>
+                  <template v-if="task.comicinfo.Translator">
+                    <span v-for="(t, idx) in String(task.comicinfo.Translator).split(',')" :key="'trans-'+idx" class="capsule capsule-trans" v-show="t.trim()">
+                      {{ t.trim() }}
+                    </span>
+                  </template>
+                  <template v-if="task.comicinfo.AgeRating">
+                    <span class="capsule capsule-age">{{ task.comicinfo.AgeRating }}</span>
+                  </template>
+                  <template v-if="task.comicinfo.Genre">
+                    <span v-for="(g, idx) in String(task.comicinfo.Genre).split(',')" :key="'genre-'+idx" class="capsule capsule-genre" v-show="g.trim()">
+                      {{ g.trim() }}
+                    </span>
+                  </template>
+                </div>
+                <p v-if="task.comicinfo && task.comicinfo.Series" class="task-filename-subtitle" :title="`${task.comicinfo.Series}${task.comicinfo.Number ? ' #' + task.comicinfo.Number : ''}`">
+                  {{ task.comicinfo.Series }}{{ task.comicinfo.Number ? ` #${task.comicinfo.Number}` : '' }}
+                </p>
+                <div class="task-actions">
+                  <button
+                    v-if="task.url"
+                    @click="openGallery(task.url)"
+                    class="gallery-button"
+                  >
+                    跳转画廊
+                  </button>
+                  <button @click="toggleLog(task.id)" class="log-button">
+                    {{ expandedLogs[task.id] ? '隐藏日志' : '查看日志' }}
+                  </button>
+                  <button
+                    v-if="task.status === '完成' && task.output_path"
+                    @click="toggleEditPanel(task)"
+                    class="edit-button"
+                  >
+                    {{ editingTasks[task.id] ? '关闭编辑' : '编辑元数据' }}
+                  </button>
+                  <button
+                    v-if="task.has_path_difference"
+                    @click="showMoveDialog(task)"
+                    :disabled="movingTasks[task.id]"
+                    class="move-button"
+                    title="移动文件到符合命名模板的新位置"
+                  >
+                    {{ movingTasks[task.id] ? '移动中...' : '移动文件' }}
+                  </button>
+                  <button
+                    v-if="task.status === '错误' || task.status === '取消'"
+                    @click="retryTask(task.id)"
+                    :disabled="retryingTasks[task.id]"
+                    class="retry-button"
+                  >
+                    {{ retryingTasks[task.id] ? '重试中...' : '重试' }}
+                  </button>
+                  <button
+                    v-if="task.status === '进行中'"
+                    @click="stopTask(task.id)"
+                    :disabled="stoppingTasks[task.id]"
+                    class="stop-button"
+                  >
+                    {{ stoppingTasks[task.id] ? '停止中...' : '停止任务' }}
+                  </button>
+                </div>
+
+
+              </div>
+            </div>
+
+            <!-- 操作状态指示器 -->
+            <div v-if="(task.repack_status && task.repack_status !== 'completed') || (task.move_status && task.move_status !== 'completed') || task.last_error" class="task-operation-status">
+              <span v-if="task.repack_status && task.repack_status !== 'completed'" :class="['op-status-badge', `op-status-${task.repack_status}`]">
+                📦 打包: {{ formatOpStatus(task.repack_status) }}
+              </span>
+              <span v-if="task.move_status && task.move_status !== 'completed'" :class="['op-status-badge', `op-status-${task.move_status}`]">
+                📁 移动: {{ formatOpStatus(task.move_status) }}
+              </span>
+              <span v-if="task.last_error" class="op-status-error-msg" :title="task.last_error">
+                ⚠️ {{ task.last_error }}
+              </span>
+            </div>
+
             <div v-if="task.error" class="task-error">
               <strong>错误:</strong> {{ task.error }}
             </div>
@@ -117,42 +228,98 @@
               </div>
             </div>
 
-            <div class="task-actions">
-              <button
-                v-if="task.url"
-                @click="openGallery(task.url)"
-                class="gallery-button"
-              >
-                跳转画廊
-              </button>
-              <button @click="toggleLog(task.id)" class="log-button">
-                {{ expandedLogs[task.id] ? '隐藏日志' : '查看日志' }}
-              </button>
-              <button
-                v-if="task.status === '错误' || task.status === '取消'"
-                @click="retryTask(task.id)"
-                :disabled="retryingTasks[task.id]"
-                class="retry-button"
-              >
-                {{ retryingTasks[task.id] ? '重试中...' : '重试' }}
-              </button>
-              <button
-                v-if="task.status === '进行中'"
-                @click="stopTask(task.id)"
-                :disabled="stoppingTasks[task.id]"
-                class="stop-button"
-              >
-                {{ stoppingTasks[task.id] ? '停止中...' : '停止任务' }}
-              </button>
-              <button
-                v-if="task.status !== '进行中'"
-                @click="confirmDeleteTask(task.id)"
-                :disabled="deletingTasks[task.id]"
-                class="delete-button"
-              >
-                {{ deletingTasks[task.id] ? '删除中...' : '删除' }}
-              </button>
+
+            <!-- 元数据编辑面板 -->
+            <div v-if="editingTasks[task.id]" class="edit-panel">
+              <h4 class="edit-panel-title">编辑 ComicInfo 元数据</h4>
+              <div class="edit-form">
+                <div class="edit-field">
+                  <label>Title</label>
+                  <input type="text" v-model="editForms[task.id].Title" />
+                </div>
+                <div class="edit-field">
+                  <label>Series</label>
+                  <input type="text" v-model="editForms[task.id].Series" />
+                </div>
+                <div class="edit-field-row">
+                  <div class="edit-field">
+                    <label>Number</label>
+                    <input type="text" v-model="editForms[task.id].Number" />
+                  </div>
+                  <div class="edit-field">
+                    <label>LanguageISO</label>
+                    <input type="text" v-model="editForms[task.id].LanguageISO" />
+                  </div>
+                </div>
+                <div class="edit-field-row">
+                  <div class="edit-field">
+                    <label>Writer</label>
+                    <input type="text" v-model="editForms[task.id].Writer" />
+                  </div>
+                  <div class="edit-field">
+                    <label>Penciller</label>
+                    <input type="text" v-model="editForms[task.id].Penciller" />
+                  </div>
+                </div>
+                <div class="edit-field">
+                  <label>Tags</label>
+                  <textarea v-model="editForms[task.id].Tags" rows="2" placeholder="逗号分隔"></textarea>
+                </div>
+                <div class="edit-field-row">
+                  <div class="edit-field">
+                    <label>Genre</label>
+                    <input type="text" v-model="editForms[task.id].Genre" />
+                  </div>
+                  <div class="edit-field">
+                    <label>Translator</label>
+                    <input type="text" v-model="editForms[task.id].Translator" />
+                  </div>
+                </div>
+                <div class="edit-field-row">
+                  <div class="edit-field">
+                    <label>AgeRating</label>
+                    <input type="text" v-model="editForms[task.id].AgeRating" />
+                  </div>
+                  <div class="edit-field">
+                    <label>Manga</label>
+                    <select v-model="editForms[task.id].Manga">
+                      <option value="">未设置</option>
+                      <option value="YesAndRightToLeft">从右到左</option>
+                      <option value="Yes">从左到右</option>
+                      <option value="No">否</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="edit-field-row">
+                  <div class="edit-field">
+                    <label>AlternateSeries</label>
+                    <input type="text" v-model="editForms[task.id].AlternateSeries" />
+                  </div>
+                  <div class="edit-field">
+                    <label>AlternateNumber</label>
+                    <input type="text" v-model="editForms[task.id].AlternateNumber" />
+                  </div>
+                </div>
+                <div class="edit-field">
+                  <label>SeriesGroup</label>
+                  <input type="text" v-model="editForms[task.id].SeriesGroup" />
+                </div>
+                <div class="edit-field">
+                  <label>Summary</label>
+                  <textarea v-model="editForms[task.id].Summary" rows="3"></textarea>
+                </div>
+              </div>
+              <div class="edit-actions">
+                <button
+                  @click="saveMetadata(task.id)"
+                  :disabled="savingMetadata[task.id]"
+                  class="save-button"
+                >
+                  {{ savingMetadata[task.id] ? '保存中...' : '保存修改' }}
+                </button>
+              </div>
             </div>
+
             <div v-if="expandedLogs[task.id]" class="task-log-container">
               <div class="task-log-header">
                 <h4>任务日志:</h4>
@@ -234,6 +401,16 @@ interface Task {
   total_size: number; // 总字节数
   speed: number; // 下载速度 B/s
   url?: string; // 画廊URL
+  metadata?: Record<string, any> | null;
+  comicinfo?: Record<string, any> | null;
+  output_path?: string | null;
+  target_path?: string | null;
+  cover_url?: string | null;
+  pending_changes?: Record<string, any> | null;
+  repack_status?: string | null;
+  move_status?: string | null;
+  last_error?: string | null;
+  has_path_difference?: boolean;
 }
 
 const tasks = ref<Task[]>([]);
@@ -247,9 +424,16 @@ const deletingTasks = ref<{ [key: string]: boolean }>({});
 const currentFilter = ref<string>('all'); // 当前选中的过滤器
 const clearing = ref(false); // 清除任务状态
 const searchQuery = ref<string>(''); // 搜索查询
+const openMenuId = ref<string | null>(null); // 控制哪个任务的更多菜单打开
 let refreshInterval: number | undefined;
 let refreshTimeout: number | undefined;
 const { isDark } = useTheme();
+
+// 元数据编辑相关状态
+const editingTasks = ref<{ [key: string]: boolean }>({});
+const editForms = ref<{ [key: string]: Record<string, any> }>({});
+const savingMetadata = ref<{ [key: string]: boolean }>({});
+const movingTasks = ref<{ [key: string]: boolean }>({});
 
 // 分页相关状态
 const pagination = ref({
@@ -397,7 +581,7 @@ const removeNotification = (id: string) => {
 };
 
 // 确认对话框系统
-const showConfirmDialog = (message: string): Promise<boolean> => {
+const showConfirmDialog = (message: string, options?: { showDeleteFileOption?: boolean }): Promise<boolean | 'delete_file'> => {
   return new Promise((resolve) => {
     // 检查是否处于深色模式
     const isDark = document.documentElement.classList.contains('dark');
@@ -442,7 +626,11 @@ const showConfirmDialog = (message: string): Promise<boolean> => {
 
     // 创建按钮容器
     const buttonContainer = document.createElement('div');
-    buttonContainer.style.cssText = 'display: flex; gap: 12px; justify-content: flex-end;';
+    buttonContainer.style.cssText = 'display: flex; justify-content: space-between; align-items: center; width: 100%;';
+
+    const leftContainer = document.createElement('div');
+    const rightContainer = document.createElement('div');
+    rightContainer.style.cssText = 'display: flex; gap: 12px;';
 
     // 创建取消按钮
     const cancelBtn = document.createElement('button');
@@ -470,8 +658,42 @@ const showConfirmDialog = (message: string): Promise<boolean> => {
       cursor: pointer;
     `;
 
-    buttonContainer.appendChild(cancelBtn);
-    buttonContainer.appendChild(confirmBtn);
+    rightContainer.appendChild(cancelBtn);
+    rightContainer.appendChild(confirmBtn);
+
+    let isDeleteFileChecked = false;
+
+    if (options?.showDeleteFileOption) {
+      const label = document.createElement('label');
+      label.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        color: ${isDark ? '#aaa' : '#888'};
+        font-size: 0.9em;
+        user-select: none;
+        margin: 0;
+      `;
+      
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.style.cssText = 'cursor: pointer; width: 16px; height: 16px; margin: 0;';
+      checkbox.onchange = (e) => {
+        isDeleteFileChecked = (e.target as HTMLInputElement).checked;
+      };
+
+      const textSpan = document.createElement('span');
+      textSpan.textContent = '连同物理文件一起删除';
+
+      label.appendChild(checkbox);
+      label.appendChild(textSpan);
+      leftContainer.appendChild(label);
+    }
+
+    buttonContainer.appendChild(leftContainer);
+    buttonContainer.appendChild(rightContainer);
+    buttonContainer.style.marginTop = '20px';
     dialog.appendChild(title);
     dialog.appendChild(messageEl);
     dialog.appendChild(buttonContainer);
@@ -488,9 +710,20 @@ const showConfirmDialog = (message: string): Promise<boolean> => {
       resolve(false);
     });
 
-    confirmBtn?.addEventListener('click', () => {
-      cleanup();
-      resolve(true);
+    confirmBtn?.addEventListener('click', async () => {
+      if (options?.showDeleteFileOption && isDeleteFileChecked) {
+        modal.style.display = 'none';
+        const doubleConfirm = await showConfirmDialog('⚠️ 警告：您勾选了连同文件系统中的物理文件一起删除。\n此操作将永久从硬盘中抹除文件且不可恢复。\n\n确定要彻底删除吗？');
+        if (doubleConfirm === true) {
+          cleanup();
+          resolve('delete_file');
+        } else {
+          modal.style.display = 'flex';
+        }
+      } else {
+        cleanup();
+        resolve(true);
+      }
     });
 
     modal.onclick = (e) => {
@@ -503,6 +736,37 @@ const showConfirmDialog = (message: string): Promise<boolean> => {
     modal.appendChild(dialog);
     document.body.appendChild(modal);
   });
+};
+
+const copyPath = async (path: string | null) => {
+  if (!path) return;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(path);
+      showNotification('路径已复制到剪贴板', 'success', 2000);
+    } else {
+      showCopyModal(path);
+    }
+  } catch (err) {
+    console.warn('复制失败:', err);
+    showCopyModal(path);
+  }
+};
+
+const copyRawMetadata = async (metadata: Record<string, any> | null | undefined) => {
+  if (!metadata) return;
+  try {
+    const content = JSON.stringify(metadata, null, 2);
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(content);
+      showNotification('原始元数据已复制到剪贴板', 'success', 2000);
+    } else {
+      showCopyModal(content);
+    }
+  } catch (err) {
+    console.warn('复制失败:', err);
+    showCopyModal(JSON.stringify(metadata, null, 2));
+  }
 };
 
 const copyLog = async (logContent: string | null) => {
@@ -694,18 +958,23 @@ const retryTask = async (taskId: string) => {
   }
 };
 
-const confirmDeleteTask = async (taskId: string) => {
-  const confirmed = await showConfirmDialog('确定要删除此任务记录吗？此操作不可撤销。');
-  if (confirmed) {
-    deleteTask(taskId);
+const confirmDeleteTask = async (task: any) => {
+  const hasOutput = !!task.output_path;
+  const result = await showConfirmDialog('确定要删除此任务记录吗？此操作不可撤销。', { showDeleteFileOption: hasOutput });
+  if (result === 'delete_file') {
+    deleteTask(task.id, true);
+  } else if (result === true) {
+    deleteTask(task.id, false);
   }
 };
 
-const deleteTask = async (taskId: string) => {
+const deleteTask = async (taskId: string, deleteFile: boolean = false) => {
   deletingTasks.value[taskId] = true;
   try {
-    await axios.delete(`${API_BASE_URL}/tasks/${taskId}`);
-    showNotification('任务已删除', 'success');
+    await axios.delete(`${API_BASE_URL}/tasks/${taskId}`, {
+      params: { delete_file: deleteFile }
+    });
+    showNotification(deleteFile ? '任务记录及物理文件已彻底删除' : '任务记录已删除', 'success');
     await fetchTasks(false);
   } catch (err: any) {
     console.error(`删除任务 ${taskId} 失败:`, err);
@@ -768,13 +1037,52 @@ const formatFilename = (filename: string | null): string => {
     .replace(/_/g, ' ')     // 替换下划线为空格
     .trim();
 
-  // 如果文件名过长，截断并添加省略号
-  const maxLength = 50;
-  if (formatted.length > maxLength) {
-    formatted = formatted.substring(0, maxLength - 3) + '...';
-  }
-
   return formatted;
+};
+
+const formatMetadataTitle = (metadata: Record<string, any>): string => {
+  const titleJpn = metadata.title_jpn;
+  const title = metadata.title;
+  if (titleJpn && title) {
+    return `${title} / ${titleJpn}`;
+  }
+  return titleJpn || title || '未知';
+};
+
+const formatTagPreview = (tags: any[]): string => {
+  if (!Array.isArray(tags) || tags.length === 0) return '';
+  const preview = tags.slice(0, 6).join(', ');
+  return tags.length > 6 ? `${preview} ... (${tags.length})` : preview;
+};
+
+const getDisplayTags = (tagsStr: string | null | undefined): string[] => {
+  if (!tagsStr) return [];
+  return tagsStr.split(',').map(t => t.trim()).filter(t => t);
+};
+
+const LANGUAGE_MAP: Record<string, string> = {
+  'zh': 'Chinese',
+  'en': 'English',
+  'ja': 'Japanese',
+  'ko': 'Korean',
+  'fr': 'French',
+  'es': 'Spanish',
+  'ru': 'Russian',
+  'de': 'German',
+  'it': 'Italian',
+  'vi': 'Vietnamese',
+  'th': 'Thai',
+  'pt': 'Portuguese',
+  'id': 'Indonesian',
+  'ar': 'Arabic'
+};
+
+const getLanguageDisplay = (langCode: string | null | undefined): string => {
+  if (!langCode) return '';
+  const code = langCode.toLowerCase().trim();
+  // Handle some common variations like zh-cn
+  if (code.startsWith('zh')) return 'Chinese';
+  return LANGUAGE_MAP[code] || langCode;
 };
 
 // 格式化字节大小为易读格式
@@ -966,15 +1274,199 @@ const startSmartRefresh = () => {
   }, interval);
 };
 
+// 切换编辑面板
+const toggleEditPanel = (task: Task) => {
+  const taskId = task.id;
+  if (editingTasks.value[taskId]) {
+    editingTasks.value[taskId] = false;
+    return;
+  }
+
+  // 初始化编辑表单：优先 comicinfo，回退 metadata
+  const metaFinal = task.comicinfo;
+  const metaRaw = task.metadata;
+
+  if (metaFinal && Object.keys(metaFinal).length > 0) {
+    // 从 ComicInfo (comicinfo) 预填
+    editForms.value[taskId] = {
+      Title: metaFinal.Title || '',
+      Series: metaFinal.Series || '',
+      Number: metaFinal.Number || '',
+      Writer: metaFinal.Writer || '',
+      Penciller: metaFinal.Penciller || '',
+      Tags: metaFinal.Tags || '',
+      LanguageISO: metaFinal.LanguageISO || '',
+      Genre: metaFinal.Genre || '',
+      Translator: metaFinal.Translator || '',
+      AgeRating: metaFinal.AgeRating || '',
+      Manga: metaFinal.Manga || '',
+      AlternateSeries: metaFinal.AlternateSeries || '',
+      AlternateNumber: metaFinal.AlternateNumber || '',
+      SeriesGroup: metaFinal.SeriesGroup || '',
+      Summary: metaFinal.Summary || '',
+    };
+  } else if (metaRaw) {
+    // 回退：从 gmetadata (metadata) 提取基本信息
+    const rawTitle = metaRaw.title_jpn || metaRaw.title || '';
+    const extractedSeries = metaRaw.Series || '';
+    const extractedNumber = metaRaw.Number || '';
+    editForms.value[taskId] = {
+      Title: rawTitle,
+      Series: extractedSeries,
+      Number: extractedNumber,
+      Writer: '',
+      Penciller: '',
+      Tags: Array.isArray(metaRaw.tags) ? metaRaw.tags.join(', ') : '',
+      LanguageISO: '',
+      Genre: metaRaw.category?.toLowerCase() !== 'non-h' ? 'Hentai' : '',
+      Translator: '',
+      AgeRating: 'R18+',
+      Manga: 'YesAndRightToLeft',
+      AlternateSeries: extractedSeries,
+      AlternateNumber: extractedNumber,
+      SeriesGroup: '',
+      Summary: '',
+    };
+  } else {
+    editForms.value[taskId] = {
+      Title: '', Series: '', Number: '', Writer: '', Penciller: '',
+      Tags: '', LanguageISO: '', Genre: '', Translator: '', AgeRating: '', Manga: '',
+      AlternateSeries: '', AlternateNumber: '', SeriesGroup: '', Summary: '',
+    };
+  }
+  editingTasks.value[taskId] = true;
+};
+
+// 保存元数据
+const saveMetadata = async (taskId: string) => {
+  savingMetadata.value[taskId] = true;
+  try {
+    // 构建要保存的元数据，过滤掉空值
+    const formData = editForms.value[taskId];
+    const metadata: Record<string, any> = {};
+    for (const [key, value] of Object.entries(formData)) {
+      if (value !== null && value !== undefined && value !== '') {
+        metadata[key] = value;
+      }
+    }
+
+    const response = await axios.patch(`${API_BASE_URL}/tasks/${taskId}/metadata`, metadata);
+    showNotification('元数据已保存', 'success');
+
+    // 更新本地任务数据
+    if (response.data.task) {
+      const index = tasks.value.findIndex(t => t.id === taskId);
+      if (index !== -1) {
+        tasks.value[index] = { ...tasks.value[index], ...response.data.task };
+      }
+    }
+  } catch (err: any) {
+    console.error(`保存元数据失败:`, err);
+    showNotification(`保存失败: ${err.response?.data?.error || err.message}`, 'error');
+  } finally {
+    savingMetadata.value[taskId] = false;
+  }
+};
+
+// 显示移动对话框
+const showMoveDialog = async (task: Task) => {
+  movingTasks.value[task.id] = true;
+  try {
+    // 1. 获取后端渲染出来的建议归类新路径
+    const response = await axios.get(`${API_BASE_URL}/tasks/${task.id}/move-path`);
+    const { current_path, suggested_path, has_difference } = response.data;
+    
+    if (!suggested_path) {
+      showNotification('未能根据配置渲染归类路径，请检查 MOVE_PATH 配置。', 'error');
+      return;
+    }
+    
+    if (!has_difference) {
+      alert(`当前文件位置已符合归档配置，无需移动。\n\n当前路径：\n${current_path}`);
+      return;
+    }
+    
+    // 2. 路径不一致，提示确认
+    const confirmed = confirm(
+      `检测到归类路径差异。是否将文件移动到新的归档位置？\n\n当前路径：\n${current_path}\n\n新归档路径：\n${suggested_path}`
+    );
+    
+    if (confirmed) {
+      await moveTaskFile(task.id, suggested_path);
+    }
+  } catch (err: any) {
+    console.error(`获取移动建议路径失败:`, err);
+    showNotification(`获取建议移动路径失败: ${err.response?.data?.error || err.message}`, 'error');
+  } finally {
+    movingTasks.value[task.id] = false;
+  }
+};
+
+// 移动文件
+const moveTaskFile = async (taskId: string, targetPath?: string) => {
+  movingTasks.value[taskId] = true;
+  try {
+    await axios.post(`${API_BASE_URL}/tasks/${taskId}/move`, { target_path: targetPath });
+    showNotification('文件已成功移动归档', 'success');
+    await fetchTasks(false);
+  } catch (err: any) {
+    console.error(`移动文件失败:`, err);
+    showNotification(`移动失败: ${err.response?.data?.error || err.message}`, 'error');
+  } finally {
+    movingTasks.value[taskId] = false;
+  }
+};
+
+// 格式化操作状态
+const formatOpStatus = (status: string): string => {
+  switch (status) {
+    case 'in_progress': return '进行中...';
+    case 'completed': return '完成';
+    case 'failed': return '失败';
+    default: return status;
+  }
+};
+
+// Language ISO 映射到本国语言名称
+const getNativeLanguageName = (iso: string): string => {
+  if (!iso) return '';
+  const langMap: Record<string, string> = {
+    'zh': '中文',
+    'zh-hk': '繁體中文',
+    'zh-tw': '繁體中文',
+    'en': 'English',
+    'ja': '日本語',
+    'ko': '한국어',
+    'fr': 'Français',
+    'de': 'Deutsch',
+    'es': 'Español',
+    'ru': 'Русский',
+    'it': 'Italiano',
+    'pt': 'Português',
+    'pt-br': 'Português (Brasil)',
+    'vi': 'Tiếng Việt',
+    'th': 'ไทย',
+    'id': 'Bahasa Indonesia',
+    'ar': 'العربية'
+  };
+  return langMap[iso.toLowerCase()] || iso;
+};
+
 onMounted(() => {
   fetchTasks(true); // 初始加载
   startSmartRefresh(); // 开始智能刷新
+  document.addEventListener('click', () => {
+    openMenuId.value = null;
+  });
 });
 
 onUnmounted(() => {
   if (refreshTimeout) {
     clearTimeout(refreshTimeout);
   }
+  document.removeEventListener('click', () => {
+    openMenuId.value = null;
+  });
 });
 </script>
 
@@ -1002,6 +1494,7 @@ h1 {
 }
 
 .task-card {
+  position: relative;
   background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
   border: 1px solid #e9ecef;
   border-radius: 12px;
@@ -1013,7 +1506,69 @@ h1 {
   max-width: 100%;
   box-sizing: border-box;
   overflow: hidden;
-  position: relative;
+}
+
+/* 更多操作菜单 */
+.task-more-menu {
+  position: absolute;
+  top: 20px; /* 和卡片内边距完美对齐 */
+  right: 20px;
+  z-index: 10;
+}
+
+.more-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.2em;
+  line-height: 1;
+  color: #aaa;
+  cursor: pointer;
+  padding: 0;
+  padding-bottom: 4px; /* 微调字符垂直居中 (弥补字体基线偏移) */
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.more-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #333;
+}
+
+.more-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: white;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  min-width: 120px;
+  padding: 4px 0;
+  z-index: 20;
+}
+
+.dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: background 0.2s ease;
+}
+
+.dropdown-item:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.delete-text {
+  color: #dc3545;
 }
 
 .task-card::before {
@@ -1039,24 +1594,31 @@ h1 {
   border-color: #dee2e6;
 }
 
-.task-header {
+.task-title-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-  gap: 15px; /* 添加间距防止挤压 */
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 4px;
+  padding-right: 28px;
 }
 
-.task-header h3 {
+.task-display-title {
   margin: 0;
+  padding-right: 28px; /* 避开右上角更多操作按钮 */
   color: #333;
-  font-size: 1.2em; /* 稍微增大主标题字体 */
-  flex: 1; /* 允许标题占据剩余空间 */
-  min-width: 0; /* 防止标题溢出 */
-  overflow-wrap: break-word;
-  word-wrap: break-word;
-  hyphens: auto;
+  font-size: clamp(0.95rem, 1vw + 0.4rem, 1.05em); /* 进一步缩小标题字号 */
+  font-weight: bold;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   line-height: 1.3;
+}
+
+.status-badge-inline {
+  font-size: 0.9em;
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
 .status-success,
@@ -1064,15 +1626,377 @@ h1 {
 .status-error,
 .status-in-progress {
   font-weight: bold;
-  white-space: nowrap; /* 防止状态文本换行 */
-  flex-shrink: 0; /* 防止状态文本被压缩 */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.task-id-subtitle {
+.task-id-subtitle,
+.task-filename-subtitle {
+  font-size: 0.85em;
+  color: #888;
+  margin: 0 0 8px 0;
+}
+
+/* 封面 + 元数据两栏布局 */
+.task-body {
+  display: flex;
+  gap: 16px;
+  /* margin-top: 12px 已移除，以使海报顶部和卡片顶部 padding(20px) 齐平 */
+}
+
+.task-body:not(.has-cover) {
+  /* 无封面时元数据占满 */
+  display: block;
+}
+
+.task-cover {
+  flex-shrink: 0;
+  width: 155px;
+  height: 155px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: transparent;
+}
+
+.task-cover img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.task-info {
+  flex: 1;
+  min-width: 0; /* 防止内容溢出 */
+  display: flex;
+  flex-direction: column;
+}
+
+.task-id-subtitle,
+.task-filename-subtitle {
+  font-size: 0.85em;
+  color: #888;
+  margin: 4px 0 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-filename-subtitle {
+  margin-bottom: 8px; /* 给下方 metadata 留出更多空间 */
+}
+
+/* 胶囊标签样式 */
+.task-capsules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.capsule {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.8em;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.capsule-lang {
+  background: rgba(13, 110, 253, 0.1);
+  color: #0d6efd;
+  border: 1px solid rgba(13, 110, 253, 0.2);
+}
+
+.capsule-age {
+  background: rgba(220, 53, 69, 0.1);
+  color: #dc3545;
+  border: 1px solid rgba(220, 53, 69, 0.2);
+}
+
+.capsule-trans {
+  background: rgba(111, 66, 193, 0.1);
+  color: #6f42c1;
+  border: 1px solid rgba(111, 66, 193, 0.2);
+}
+
+.capsule-genre {
+  background: rgba(108, 117, 125, 0.1);
+  color: #6c757d;
+  border: 1px solid rgba(108, 117, 125, 0.2);
+}
+
+.path-button {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.85em;
+  color: #555;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  transition: all 0.2s;
+}
+
+.path-button:hover {
+  background: rgba(0, 0, 0, 0.1);
+  color: #333;
+}
+
+.dark .path-button {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #ccc;
+}
+
+.dark .path-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.task-metadata {
+  margin-top: 6px;
+  font-size: 0.88em;
+  color: #555;
+  display: grid;
+  gap: 4px;
+}
+.task-metadata-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  line-height: 1.5;
+}
+
+.task-metadata-label {
+  font-weight: 600;
+  color: #444;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+/* 操作状态指示器 */
+.task-operation-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.op-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.8em;
+  font-weight: 500;
+}
+
+.op-status-in_progress {
+  background: rgba(0, 123, 255, 0.12);
+  color: #007bff;
+  border: 1px solid rgba(0, 123, 255, 0.3);
+}
+
+.op-status-completed {
+  background: rgba(40, 167, 69, 0.12);
+  color: #28a745;
+  border: 1px solid rgba(40, 167, 69, 0.3);
+}
+
+.op-status-failed {
+  background: rgba(220, 53, 69, 0.12);
+  color: #dc3545;
+  border: 1px solid rgba(220, 53, 69, 0.3);
+}
+
+.op-status-error-msg {
+  font-size: 0.8em;
+  color: #dc3545;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 编辑按钮 */
+.edit-button {
+  padding: 8px 15px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
   font-size: 0.9em;
-  color: #666;
-  margin-top: 5px;
-  margin-bottom: 10px;
+  transition: all 0.3s ease;
+  background-color: #17a2b8;
+  color: white;
+}
+
+.edit-button:hover {
+  background-color: #138496;
+}
+
+/* 编辑面板 */
+.edit-panel {
+  margin-top: 15px;
+  padding: 16px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 10px;
+  animation: slideDown 0.3s ease-out;
+}
+
+.edit-panel-title {
+  margin: 0 0 14px 0;
+  font-size: 1em;
+  font-weight: 600;
+  color: #333;
+}
+
+.edit-form {
+  display: grid;
+  gap: 10px;
+}
+
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.edit-field label {
+  font-size: 0.82em;
+  font-weight: 600;
+  color: #555;
+}
+
+.edit-field input,
+.edit-field textarea,
+.edit-field select {
+  padding: 7px 10px;
+  border: 1px solid #dee2e6;
+  border-radius: 5px;
+  font-size: 0.9em;
+  background: white;
+  color: #333;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.edit-field input:focus,
+.edit-field textarea:focus,
+.edit-field select:focus {
+  border-color: #007bff;
+  outline: none;
+  box-shadow: 0 0 0 0.15rem rgba(0, 123, 255, 0.2);
+}
+
+.edit-field textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.edit-field-row {
+  display: flex;
+  gap: 10px;
+}
+
+/* 编辑操作按钮 */
+.edit-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.save-button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: all 0.3s ease;
+  background: linear-gradient(135deg, #28a745, #20c997);
+  color: white;
+  font-weight: 500;
+}
+
+.save-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1e7e34, #1baa80);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+}
+
+.save-button:disabled {
+  background: #cccccc;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.repack-button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: all 0.3s ease;
+  background: linear-gradient(135deg, #fd7e14, #e65c00);
+  color: white;
+  font-weight: 500;
+}
+
+.repack-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #e65c00, #cc5200);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(253, 126, 20, 0.3);
+}
+
+.repack-button:disabled {
+  background: #cccccc;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.move-button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: all 0.3s ease;
+  background: linear-gradient(135deg, #6f42c1, #5a2d91);
+  color: white;
+  font-weight: 500;
+}
+
+.move-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #5a2d91, #4a2577);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(111, 66, 193, 0.3);
+}
+
+.move-button:disabled {
+  background: #cccccc;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.pending-indicator {
+  margin-top: 10px;
+  padding: 6px 12px;
+  background: rgba(255, 193, 7, 0.12);
+  border: 1px solid rgba(255, 193, 7, 0.3);
+  border-radius: 6px;
+  color: #856404;
+  font-size: 0.85em;
+  font-weight: 500;
 }
 
 .status-success {
@@ -1102,12 +2026,13 @@ h1 {
 }
 
 .task-actions {
-  margin-top: 15px;
+  margin-top: auto; /* Push to the bottom of flex container */
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
-.log-button, .stop-button, .retry-button, .gallery-button, .refresh-button, .delete-button {
+.log-button, .stop-button, .retry-button, .gallery-button, .refresh-button, .move-button, .edit-button {
   padding: 8px 15px;
   border: none;
   border-radius: 5px;
@@ -1158,20 +2083,6 @@ h1 {
 }
 
 .stop-button:disabled {
-  background-color: #cccccc;
-  cursor: not-allowed;
-}
-
-.delete-button {
-  background-color: #6c757d;
-  color: white;
-}
-
-.delete-button:hover {
-  background-color: #5a6268;
-}
-
-.delete-button:disabled {
   background-color: #cccccc;
   cursor: not-allowed;
 }
@@ -1710,6 +2621,80 @@ h1 {
   background: rgba(255, 255, 255, 0.1);
 }
 
+.tags-container {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+  /* 可选：添加右侧淡出效果，让截断更优雅 */
+  mask-image: linear-gradient(to right, black 85%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
+  padding-right: 20px; /* 为淡出留出空间 */
+}
+
+.tags-container::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Opera */
+}
+
+.tag-capsule {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  background-color: #e9ecef;
+  color: #495057;
+  border-radius: 12px;
+  font-size: 0.85em;
+  white-space: nowrap;
+  flex-shrink: 0; /* 防止标签被挤压变形 */
+}
+
+.dark-theme .tag-capsule,
+.dark .tag-capsule {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #e0a800;
+}
+
+.dark .capsule-lang {
+  background: rgba(13, 110, 253, 0.2);
+  color: #6ea8fe;
+  border-color: rgba(13, 110, 253, 0.3);
+}
+
+.dark .capsule-age {
+  background: rgba(220, 53, 69, 0.2);
+  color: #ea868f;
+  border-color: rgba(220, 53, 69, 0.3);
+}
+
+.dark .capsule-trans {
+  background: rgba(111, 66, 193, 0.2);
+  color: #b193f4;
+  border-color: rgba(111, 66, 193, 0.3);
+}
+
+.dark .capsule-genre {
+  background: rgba(108, 117, 125, 0.2);
+  color: #adb5bd;
+  border-color: rgba(108, 117, 125, 0.3);
+}
+
+/* Edit Panel Dark Mode */
+.tag-more {
+  font-weight: bold;
+  background-color: transparent !important;
+  color: #007bff !important;
+  padding: 0 4px;
+}
+
+.dark-theme .tag-more,
+.dark .tag-more {
+  color: #63b3ed !important;
+}
+
 </style>
 
 <style scoped>
@@ -1762,6 +2747,25 @@ h1 {
     overflow: hidden;
   }
 
+  .task-body.has-cover {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .task-cover {
+    width: 120px;
+    height: 120px;
+  }
+
+  .task-cover img {
+    max-width: 100%;
+    max-height: 100%;
+  }
+
+  .task-info {
+    width: 100%;
+  }
+
   .task-header {
     flex-direction: column;
     align-items: flex-start;
@@ -1780,6 +2784,18 @@ h1 {
   .log-button, .stop-button {
     width: 100%;
     justify-content: center;
+  }
+
+  .edit-field-row {
+    flex-direction: column;
+  }
+
+  .edit-actions {
+    flex-direction: column;
+  }
+
+  .edit-actions button {
+    width: 100%;
   }
 
   .task-log-container {
@@ -1856,6 +2872,20 @@ h1 {
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
+.dark .more-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #eee;
+}
+
+.dark .more-dropdown {
+  background: #2a2a2a;
+  border-color: #444;
+}
+
+.dark .dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .dark .task-card::before {
   background: linear-gradient(90deg, #007bff 0%, #28a745 50%, #6f42c1 100%);
 }
@@ -1867,12 +2897,67 @@ h1 {
   transform: translateY(-3px);
 }
 
-.dark .task-header h3 {
+.dark .task-display-title {
   color: var(--text-color-light);
 }
 
-.dark .task-id-subtitle {
+.dark .task-id-subtitle,
+.dark .task-filename-subtitle {
   color: var(--text-color-light);
+}
+
+.dark .task-metadata {
+  color: var(--text-color-light);
+}
+
+.dark .edit-panel {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.dark .edit-panel-title {
+  color: var(--text-color-light);
+}
+
+.dark .edit-field label {
+  color: var(--text-color-light);
+}
+
+.dark .edit-field input,
+.dark .edit-field textarea,
+.dark .edit-field select {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-color-light);
+}
+
+.dark .edit-field input:focus,
+.dark .edit-field textarea:focus,
+.dark .edit-field select:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 0.15rem rgba(0, 123, 255, 0.3);
+}
+
+.dark .edit-button {
+  background-color: rgba(23, 162, 184, 0.8);
+}
+
+.dark .edit-button:hover {
+  background-color: rgba(19, 132, 150, 0.9);
+}
+
+.dark .pending-indicator {
+  background: rgba(255, 193, 7, 0.15);
+  border-color: rgba(255, 193, 7, 0.4);
+  color: #ffc107;
+}
+
+.dark .op-status-error-msg {
+  color: #f58d97;
+}
+
+.dark .task-cover img {
+  /* border-color removed since border is removed from img */
 }
 
 .dark .filter-controls {
@@ -2047,14 +3132,11 @@ h1 {
   background-color: #c82333;
 }
 
-.dark .delete-button {
-  background-color: #6c757d;
-  color: white;
-}
 
 .dark .delete-button:hover {
-  background-color: #5a6268;
+  background-color: #6c757d;
 }
+
 
 .dark .retry-button {
   background-color: #28a745;

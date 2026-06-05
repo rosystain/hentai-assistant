@@ -44,6 +44,57 @@ def check_dirs(path):
         os.makedirs(path)
     return path
 
+import threading
+import time
+
+_cover_download_lock = threading.Lock()
+
+def download_cover(url: str, task_id: str, app_config: dict, logger=None) -> str:
+    """下载封面并保存到本地缓存目录"""
+    if not url:
+        return url
+        
+    import requests
+    cover_dir = check_dirs('./data/covers')
+    
+    # 获取扩展名，默认为 .jpg
+    ext = ".jpg"
+    if url.lower().endswith(('.png', '.webp', '.jpeg', '.gif', '.jpg')):
+        ext = os.path.splitext(url.split('?')[0])[1].lower()
+        
+    save_path = os.path.join(cover_dir, f"{task_id}{ext}")
+    
+    try:
+        proxies = None
+        if app_config and app_config.get('PROXY_URL'):
+            proxies = {
+                'http': app_config['PROXY_URL'],
+                'https': app_config['PROXY_URL']
+            }
+            
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': url
+        }
+        
+        # 增加全局锁和延时，防止高并发导致 IP 被源站拉黑
+        with _cover_download_lock:
+            # 增加随机延时，降低被封禁风险
+            import random
+            time.sleep(random.uniform(0.5, 1.5))
+            
+            response = requests.get(url, headers=headers, proxies=proxies, timeout=10)
+            response.raise_for_status()
+            
+            with open(save_path, 'wb') as f:
+                f.write(response.content)
+            
+        return f"/api/covers/{task_id}{ext}"
+    except Exception as e:
+        if logger:
+            logger.error(f"Failed to download cover {url} for task {task_id}: {e}")
+        return url  # 下载失败则回退到原始 URL
+
 # 判断是否为 URL
 def is_url(text):
     # 正则表达式用于匹配 URL

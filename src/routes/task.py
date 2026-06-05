@@ -7,6 +7,25 @@ from flask import Blueprint, current_app, request
 import sqlite3
 from utils import json_response
 
+def enrich_task_data(task_dict, app):
+    """为任务实体注入 has_path_difference 字段以支持前端智能移动亮起交互"""
+    if not task_dict:
+        return task_dict
+    from utils_move import calculate_task_move_path
+    import os
+    current_path = task_dict.get('output_path')
+    suggested = calculate_task_move_path(task_dict, app)
+    
+    # 将只读的 sqlite3.Row 或内存 dict 统一规范化为可写 dict
+    task_data = dict(task_dict)
+    
+    if current_path and suggested and task_dict.get('status') == '完成':
+        task_data['has_path_difference'] = os.path.normpath(current_path) != os.path.normpath(suggested)
+        task_data['target_path'] = suggested
+    else:
+        task_data['has_path_difference'] = False
+    return task_data
+
 # 创建 Blueprint 实例
 bp = Blueprint('task', __name__)
 
@@ -59,6 +78,45 @@ def get_task_stats():
         if global_logger:
             global_logger.error(f"Database error getting task stats: {e}")
         return json_response({'error': 'Failed to get task statistics'}), 500
+
+@bp.route('/api/covers/<filename>', methods=['GET'])
+def get_cover(filename):
+    """获取任务的本地缓存封面，若丢失则尝试重新下载或重定向回原始 URL"""
+    import os
+    from flask import send_from_directory, redirect
+    from utils import check_dirs, download_cover
+    from database import task_db
+
+    cover_dir = os.path.abspath(check_dirs('./data/covers'))
+    file_path = os.path.join(cover_dir, filename)
+    task_id = os.path.splitext(filename)[0]
+    
+    # 忽略前端请求的扩展名，直接查找该 task_id 的任何本地缓存文件
+    import glob
+    matching_files = glob.glob(os.path.join(cover_dir, f"{task_id}.*"))
+    if matching_files:
+        # 取找到的第一个文件（真实存在的扩展名，比如 .webp）并返回
+        actual_filename = os.path.basename(matching_files[0])
+        return send_from_directory(cover_dir, actual_filename)
+        
+    # 如果文件不存在，尝试从数据库获取原始链接重新下载
+    task_info = task_db.get_task(task_id)
+    if task_info and task_info.get('metadata'):
+        metadata = task_info['metadata']
+        if isinstance(metadata, dict):
+            raw_cover_url = metadata.get('thumb') or metadata.get('thumbnail_url')
+            if raw_cover_url:
+                # 尝试重新下载
+                new_url = download_cover(raw_cover_url, task_id, current_app.config)
+                if new_url.startswith('/api/covers/'):
+                    # 重新下载成功，提取新的文件名并返回
+                    new_filename = new_url.split('/')[-1]
+                    return send_from_directory(cover_dir, new_filename)
+                else:
+                    # 下载失败，作为最后手段直接 302 重定向到原始直链
+                    return redirect(raw_cover_url)
+                    
+    return json_response({'error': 'Cover not found and cannot be recovered'}), 404
 
 @bp.route('/api/tasks/clear', methods=['POST'])
 def clear_tasks():
@@ -146,6 +204,7 @@ def get_task(task_id):
         with tasks_lock:
             memory_task = tasks.get(task_id)
             if memory_task:
+                # 把内存中任务的所有熟悉转换为字典，避免遗漏 output_path 等新字段
                 task_data = {
                     'id': task_id,
                     'status': memory_task.status,
@@ -155,14 +214,21 @@ def get_task(task_id):
                     'downloaded': memory_task.downloaded,
                     'total_size': memory_task.total_size,
                     'speed': memory_task.speed,
+                    'url': getattr(memory_task, 'url', None),
+                    'mode': getattr(memory_task, 'mode', None),
+                    'metadata': getattr(memory_task, 'metadata', None),
+                    'comicinfo': getattr(memory_task, 'comicinfo', None),
+                    'output_path': getattr(memory_task, 'output_path', None),
+                    'target_path': getattr(memory_task, 'target_path', None),
+                    'cover_url': getattr(memory_task, 'cover_url', None),
                     'log': memory_task.log_buffer.getvalue()
                 }
-                return json_response(task_data)
+                return json_response(enrich_task_data(task_data, current_app))
 
         # 如果内存中没有，检查数据库
         db_task = task_db.get_task(task_id)
         if db_task:
-            return json_response(db_task)
+            return json_response(enrich_task_data(db_task, current_app))
 
         return json_response({'error': 'Task not found'}), 404
 
@@ -196,6 +262,10 @@ def delete_task(task_id):
         if task_info['status'] == TaskStatus.IN_PROGRESS:
             return json_response({'error': 'Cannot delete task that is in progress'}), 400
 
+        # 检查是否要求同时删除物理文件
+        delete_file = request.args.get('delete_file', 'false').lower() == 'true'
+        output_path = task_info.get('output_path')
+        
         # 从内存中删除任务（如果存在）
         with tasks_lock:
             if task_id in tasks:
@@ -204,14 +274,52 @@ def delete_task(task_id):
                     tasks[task_id].log_buffer.close()
                 del tasks[task_id]
 
+        # 如果要求删除物理文件且路径存在，则尝试删除文件
+        file_deleted_msg = ""
+        if delete_file and output_path:
+            import os
+            import shutil
+            try:
+                if os.path.exists(output_path):
+                    if os.path.isdir(output_path):
+                        shutil.rmtree(output_path)
+                    else:
+                        os.remove(output_path)
+                        # 清理可能残留的 aria2 后缀文件
+                        aria2_file = f"{output_path}.aria2"
+                        if os.path.exists(aria2_file):
+                            os.remove(aria2_file)
+                    file_deleted_msg = " and physical file/directory removed"
+                    if global_logger:
+                        global_logger.info(f"Physical file for task {task_id} removed: {output_path}")
+                else:
+                    file_deleted_msg = " (physical file not found)"
+            except Exception as e:
+                file_deleted_msg = f" (failed to remove physical file: {e})"
+                if global_logger:
+                    global_logger.error(f"Failed to remove physical file for task {task_id} at {output_path}: {e}")
+
         # 从数据库删除任务
         success = task_db.delete_task(task_id)
         if not success:
             return json_response({'error': 'Failed to delete task from database'}), 500
 
+        # 清理可能存在的本地封面缓存
+        cover_url = task_info.get('cover_url')
+        if cover_url and cover_url.startswith('/api/covers/'):
+            import os
+            try:
+                filename = cover_url.split('/')[-1]
+                cover_path = os.path.join(os.path.abspath('./data/covers'), filename)
+                if os.path.exists(cover_path):
+                    os.remove(cover_path)
+            except Exception as e:
+                if global_logger:
+                    global_logger.warning(f"Failed to remove cover file for task {task_id}: {e}")
+
         if global_logger:
-            global_logger.info(f"Task {task_id} deleted successfully")
-        return json_response({'message': 'Task deleted successfully'}), 200
+            global_logger.info(f"Task {task_id} deleted successfully{file_deleted_msg}")
+        return json_response({'message': f'Task deleted successfully{file_deleted_msg}'}), 200
 
     except Exception as e:
         if global_logger:
@@ -490,7 +598,7 @@ def get_tasks():
             failed_count = 0
 
         return json_response({
-            'tasks': db_tasks,
+            'tasks': [enrich_task_data(t, current_app) for t in db_tasks],
             'total': total,
             'page': page,
             'page_size': page_size,
@@ -508,3 +616,334 @@ def get_tasks():
         if global_logger:
             global_logger.error(f"Error getting tasks: {e}")
         return json_response({'error': f'Failed to get tasks: {str(e)}'}), 500
+
+@bp.route('/api/tasks/<task_id>/metadata', methods=['PATCH'])
+def update_task_metadata(task_id):
+    """更新任务的元数据（保存编辑结果到 comicinfo 和 pending_changes）"""
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        from database import task_db
+
+        # 获取请求体
+        data = request.get_json()
+        if not data:
+            return json_response({'error': 'No metadata provided'}), 400
+
+        # 检查任务是否存在
+        task_info = task_db.get_task(task_id)
+        if not task_info:
+            return json_response({'error': 'Task not found'}), 404
+
+        # 定义所有支持的 ComicInfo 标准字段
+        key_map = {
+            'agerating': 'AgeRating', 'languageiso': 'LanguageISO',
+            'alternateseries': 'AlternateSeries', 'alternatenumber': 'AlternateNumber',
+            'storyarc': 'StoryArc', 'storyarcnumber': 'StoryArcNumber',
+            'seriesgroup': 'SeriesGroup', 'coverartist': 'CoverArtist',
+            'gtin': 'GTIN', 'number': 'Number', 'series': 'Series',
+            'title': 'Title', 'writer': 'Writer', 'penciller': 'Penciller',
+            'translator': 'Translator', 'tags': 'Tags', 'web': 'Web',
+            'manga': 'Manga', 'genre': 'Genre', 'summary': 'Summary'
+        }
+        
+        # 允许修改并写入的字段，不再严格依赖 config.yaml，而是开放所有支持的规范字段
+        # 这样用户在前端手动编辑如 SeriesGroup, Summary 时才能生效
+        allowed_keys = set(key_map.values())
+
+        # 检查这些需要在 ComicInfo.xml 中写入的字段是否真的发生了变化
+        old_metadata = task_info.get('comicinfo') or {}
+        pending_changes_diff = {}
+        for key in allowed_keys:
+            if key not in data and key not in old_metadata:
+                continue
+            new_val = data.get(key)
+            old_val = old_metadata.get(key)
+            
+            # 将 None 和空字符串等同处理，避免因为空值类型不一致误触发打包
+            new_val_str = str(new_val).strip() if new_val is not None else ""
+            old_val_str = str(old_val).strip() if old_val is not None else ""
+            if new_val_str != old_val_str:
+                pending_changes_diff[key] = new_val
+
+        # 尝试自动进行重新打包物理文件
+        import os
+        import cbztool
+        cbz_path = task_info.get('output_path')
+        
+        # 默认设定：不需要或成功打包
+        pending_changes = {}
+        repack_status = 'completed'
+        last_error = None
+        
+        # 性能优化：只有当确实有属于 ComicInfo 配置范围内的字段发生了变化时，才进行物理打包操作
+        if pending_changes_diff and cbz_path and os.path.exists(cbz_path):
+            # 将新数据按照白名单过滤，只写入配置允许的字段到 ComicInfo.xml
+            filtered_metadata = {k: v for k, v in data.items() if k in allowed_keys}
+            try:
+                # 临时标记重新打包中，以便有据可查
+                task_db.update_task(task_id, repack_status='in_progress')
+                result = cbztool.update_comicinfo_in_cbz(cbz_path, filtered_metadata, logger=global_logger)
+                if not result:
+                    pending_changes = pending_changes_diff
+                    repack_status = 'failed'
+                    last_error = '写入 ComicInfo.xml 失败'
+            except Exception as e:
+                pending_changes = pending_changes_diff
+                repack_status = 'failed'
+                last_error = f'自动打包失败: {str(e)}'
+        elif pending_changes_diff and cbz_path:
+            # 有 output_path 但文件不存在，且确实有待写入 XML 的元数据更改
+            pending_changes = pending_changes_diff
+            repack_status = 'failed'
+            last_error = f'物理文件不存在，无法打包: {cbz_path}'
+
+        # 将提交的数据保存为 comicinfo
+        task_db.update_task(
+            task_id,
+            comicinfo=data,
+            pending_changes=pending_changes,
+            repack_status=repack_status,
+            last_error=last_error
+        )
+
+        if global_logger:
+            global_logger.info(f"Task {task_id} metadata saved and repack executed (status: {repack_status})")
+
+        # 返回更新且增强后的任务数据
+        updated_task = task_db.get_task(task_id)
+        return json_response({
+            'message': 'Metadata updated and repacked successfully',
+            'task': enrich_task_data(updated_task, current_app)
+        })
+
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"Error updating task metadata {task_id}: {e}")
+        return json_response({'error': f'Failed to update metadata: {str(e)}'}), 500
+
+@bp.route('/api/tasks/<task_id>/repack', methods=['POST'])
+def repack_task(task_id):
+    """重新打包任务的 CBZ 文件（使用 comicinfo 中的元数据更新 ComicInfo.xml）"""
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        from database import task_db
+        import cbztool
+
+        # 检查任务是否存在
+        task_info = task_db.get_task(task_id)
+        if not task_info:
+            return json_response({'error': 'Task not found'}), 404
+
+        # 检查是否有 comicinfo
+        comicinfo = task_info.get('comicinfo')
+        if not comicinfo:
+            return json_response({'error': 'No comicinfo available. Save metadata first.'}), 400
+
+        # 确定要操作的文件路径
+        cbz_path = task_info.get('output_path')
+        if not cbz_path:
+            return json_response({'error': 'No output_path set for this task'}), 400
+
+        import os
+        if not os.path.exists(cbz_path):
+            task_db.update_task(task_id, repack_status='failed', last_error=f'文件不存在: {cbz_path}')
+            return json_response({'error': f'CBZ file does not exist: {cbz_path}'}), 404
+
+        # 标记重新打包进行中
+        task_db.update_task(task_id, repack_status='in_progress')
+
+        # 根据 config 中的 comicinfo 配置白名单过滤元数据，避免把物理属性（如默认不写入的 Series）误写进 ComicInfo.xml
+        comicinfo_config = current_app.config.get('COMICINFO', {}) or {}
+        key_map = {
+            'agerating': 'AgeRating',
+            'languageiso': 'LanguageISO',
+            'alternateseries': 'AlternateSeries',
+            'alternatenumber': 'AlternateNumber',
+            'storyarc': 'StoryArc',
+            'storyarcnumber': 'StoryArcNumber',
+            'seriesgroup': 'SeriesGroup',
+            'coverartist': 'CoverArtist',
+            'gtin': 'GTIN',
+            'number': 'Number',
+            'series': 'Series',
+            'title': 'Title',
+            'writer': 'Writer',
+            'penciller': 'Penciller',
+            'translator': 'Translator',
+            'tags': 'Tags',
+            'web': 'Web',
+            'manga': 'Manga',
+            'genre': 'Genre'
+        }
+        allowed_keys = set()
+        for k in comicinfo_config.keys():
+            allowed_keys.add(key_map.get(k.lower(), k.capitalize()))
+            
+        filtered_metadata = {k: v for k, v in comicinfo.items() if k in allowed_keys}
+
+        # 执行重新打包（仅替换 ComicInfo.xml）
+        result = cbztool.update_comicinfo_in_cbz(cbz_path, filtered_metadata, logger=global_logger)
+
+        if result:
+            # 成功：清除 pending_changes，更新状态
+            task_db.update_task(
+                task_id,
+                repack_status='completed',
+                pending_changes={},
+                last_error=None
+            )
+            if global_logger:
+                global_logger.info(f"Task {task_id} repack completed: {cbz_path}")
+            return json_response({'message': 'Repack completed successfully', 'output_path': result})
+        else:
+            task_db.update_task(task_id, repack_status='failed', last_error='CBZ 更新失败')
+            return json_response({'error': 'Repack failed'}), 500
+
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"Error repacking task {task_id}: {e}")
+        # 更新失败状态
+        try:
+            from database import task_db as db
+            db.update_task(task_id, repack_status='failed', last_error=str(e))
+        except Exception:
+            pass
+        return json_response({'error': f'Failed to repack: {str(e)}'}), 500
+
+@bp.route('/api/tasks/<task_id>/move-path', methods=['GET'])
+def get_task_move_path(task_id):
+    """计算任务基于当前元数据和完成后移动配置模板渲染出的建议物理目标路径"""
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        from database import task_db
+        from utils_move import calculate_task_move_path
+        
+        task_info = task_db.get_task(task_id)
+        if not task_info:
+            return json_response({'error': 'Task not found'}), 404
+            
+        current_path = task_info.get('output_path')
+        if not current_path:
+            return json_response({'error': 'No output_path set for this task'}), 400
+            
+        suggested_path = calculate_task_move_path(task_info, current_app, logger=global_logger)
+        
+        if not suggested_path:
+            return json_response({
+                'current_path': current_path,
+                'suggested_path': None,
+                'has_difference': False,
+                'message': '未配置移动模板或渲染失败，使用当前路径'
+            })
+            
+        import os
+        has_difference = os.path.normpath(current_path) != os.path.normpath(suggested_path)
+        
+        return json_response({
+            'current_path': current_path,
+            'suggested_path': suggested_path,
+            'has_difference': has_difference
+        })
+        
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"Error calculating task move path {task_id}: {e}")
+        return json_response({'error': f'Failed to calculate move path: {str(e)}'}), 500
+
+@bp.route('/api/tasks/<task_id>/move', methods=['POST'])
+def move_task_file(task_id):
+    """移动任务的输出文件到新路径"""
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        from database import task_db
+        from utils_move import calculate_task_move_path
+        import os
+        import shutil
+
+        # 检查任务是否存在
+        task_info = task_db.get_task(task_id)
+        if not task_info:
+            return json_response({'error': 'Task not found'}), 404
+
+        # 获取请求体，支持自动计算目标路径
+        data = request.get_json() or {}
+        target_path = data.get('target_path')
+        
+        if not target_path:
+            target_path = calculate_task_move_path(task_info, current_app, logger=global_logger)
+            if not target_path:
+                return json_response({'error': 'No target_path provided and automatic path calculation failed'}), 400
+
+        # 确定源文件路径
+        source_path = task_info.get('output_path')
+        if not source_path:
+            return json_response({'error': 'No output_path set for this task'}), 400
+
+        if not os.path.exists(source_path):
+            task_db.update_task(task_id, move_status='failed', last_error=f'源文件不存在: {source_path}')
+            return json_response({'error': f'Source file does not exist: {source_path}'}), 404
+
+        # 检查源路径和目标路径是否一致
+        if os.path.normpath(source_path) == os.path.normpath(target_path):
+            task_db.update_task(task_id, move_status='completed', last_error=None)
+            return json_response({
+                'message': 'Source and target paths are identical. No movement required.',
+                'output_path': source_path
+            })
+
+        # 标记移动进行中
+        task_db.update_task(task_id, move_status='in_progress')
+
+        try:
+            # 确保目标目录存在
+            target_dir = os.path.dirname(target_path)
+            if target_dir:
+                os.makedirs(target_dir, exist_ok=True)
+
+            # 移动文件
+            shutil.move(source_path, target_path)
+
+            # 更新数据库
+            task_db.update_task(
+                task_id,
+                output_path=target_path,
+                target_path=target_path,
+                move_status='completed',
+                last_error=None
+            )
+
+            if global_logger:
+                global_logger.info(f"Task {task_id} file moved: {source_path} -> {target_path}")
+
+            # 如果启用了 Komga，触发媒体库扫描
+            komga_toggle = current_app.config.get('KOMGA_TOGGLE', False)
+            komga_library_id = current_app.config.get('KOMGA_LIBRARY_ID', '')
+            if komga_toggle and komga_library_id:
+                try:
+                    from providers import komga
+                    kmg = komga.KomgaAPI(
+                        server=current_app.config['KOMGA_SERVER'],
+                        username=current_app.config['KOMGA_USERNAME'],
+                        password=current_app.config['KOMGA_PASSWORD'],
+                        logger=global_logger
+                    )
+                    kmg.scan_library(komga_library_id)
+                    if global_logger:
+                        global_logger.info(f"Triggered Komga library scan after file move")
+                except Exception as scan_err:
+                    if global_logger:
+                        global_logger.warning(f"Failed to trigger Komga scan: {scan_err}")
+
+            return json_response({
+                'message': 'File moved successfully',
+                'output_path': target_path
+            })
+
+        except Exception as move_err:
+            task_db.update_task(task_id, move_status='failed', last_error=str(move_err))
+            raise move_err
+
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"Error moving task file {task_id}: {e}")
+        return json_response({'error': f'Failed to move file: {str(e)}'}), 500

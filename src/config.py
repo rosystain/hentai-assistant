@@ -80,9 +80,11 @@ def get_default_config():
             'manga': '{{manga}}',
             'genre': '{{genre}}',
             'languageiso': '{{languageiso}}',
-            'number': '',
-            'alternateseries': '{{series}}',
-            'alternatenumber': '{{number}}'
+            'series': '{{series}}',
+            'number': '{{number}}',
+            'alternateseries': '',
+            'alternatenumber': '',
+            'seriesgroup': ''
         }
     }
 

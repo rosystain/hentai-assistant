@@ -218,56 +218,68 @@ export const configLabels: Record<string, Record<string, FieldLabel>> = {
     // ========== ComicInfo 配置 ==========
     comicinfo: {
         title: {
-            label: '标题',
-            description: 'Title - 系列标题'
+            label: 'Title',
+            description: '标题'
         },
         writer: {
-            label: '作者',
-            description: 'Writer - 作者'
+            label: 'Writer',
+            description: '作者'
         },
         penciller: {
-            label: '画师',
-            description: 'Penciller - 画师'
+            label: 'Penciller',
+            description: '画师'
         },
         translator: {
-            label: '翻译者',
-            description: 'Translator - 翻译者'
+            label: 'Translator',
+            description: '翻译者'
         },
         tags: {
-            label: '标签',
-            description: 'Tags - 标签'
+            label: 'Tags',
+            description: '标签'
         },
         web: {
-            label: '来源链接',
-            description: 'Web - 来源'
+            label: 'Web',
+            description: '来源链接'
         },
         agerating: {
-            label: '年龄分级',
-            description: 'AgeRating - 年龄分级'
+            label: 'AgeRating',
+            description: '年龄分级'
         },
         manga: {
-            label: '漫画类型',
-            description: 'Manga - 漫画阅读方向'
+            label: 'Manga',
+            description: '阅读方向，有效值为 YesAndRightToLeft'
         },
         genre: {
-            label: '类型',
-            description: 'Genre - 流派'
+            label: 'Genre',
+            description: '流派'
         },
         languageiso: {
-            label: '语言代码',
-            description: 'LanguageISO - 语言'
+            label: 'LanguageISO',
+            description: '语言代码'
+        },
+        series: {
+            label: 'Series',
+            description: '系列标题，优先级高于从文件夹名称提取的标题'
         },
         number: {
-            label: '序号',
-            description: 'Number - 书籍序号'
+            label: 'Number',
+            description: '序号，优先级高于从文件名中提取的序号'
         },
         alternateseries: {
-            label: '系列名',
-            description: 'AlternateSeries - 阅读列表标题，留空则不创建阅读列表'
+            label: 'AlternateSeries',
+            description: '在 Komga/Kavita 中用于创建或加入阅读列表(Reading Lists)'
         },
         alternatenumber: {
-            label: '系列序号',
-            description: 'AlternateNumber - 阅读列表中的序号'
+            label: 'AlternateNumber',
+            description: '阅读列表(Reading Lists)中的序号'
+        },
+        seriesgroup: {
+            label: 'SeriesGroup',
+            description: '在 Komga/Kavita 中用于创建或加入合集(Collections)'
+        },
+        summary: {
+            label: 'Summary',
+            description: '漫画简介或描述内容'
         }
     }
 };

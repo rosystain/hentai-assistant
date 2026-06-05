@@ -30,6 +30,67 @@ def make_comicinfo_xml(metadata):
         dicttoxml.dicttoxml(metadata, custom_root='ComicInfo', attr_type=False)
     ).toprettyxml(indent="  ", encoding="UTF-8")
 
+def update_comicinfo_in_cbz(cbz_path, metadata, logger=None):
+    """
+    仅更新 CBZ 文件中的 ComicInfo.xml，不重新处理图片。
+    适用于元数据编辑后的快速重新打包场景。
+
+    Args:
+        cbz_path: CBZ 文件的路径
+        metadata: ComicInfo 元数据字典
+        logger: 可选的日志记录器
+
+    Returns:
+        成功返回 cbz_path，失败返回 None
+    """
+    if not os.path.exists(cbz_path):
+        if logger:
+            logger.error(f"CBZ 文件不存在: {cbz_path}")
+        return None
+
+    if not cbz_path.lower().endswith('.cbz'):
+        if logger:
+            logger.error(f"不是 CBZ 文件: {cbz_path}")
+        return None
+
+    try:
+        xml_content = make_comicinfo_xml(metadata)
+        cbz_dir = os.path.dirname(cbz_path)
+
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(dir=cbz_dir, suffix=".cbz", delete=False) as tmp:
+            temp_path = tmp.name
+
+        # 复制原 CBZ 中除 ComicInfo.xml 以外的所有文件，再写入新的 ComicInfo.xml
+        with zipfile.ZipFile(cbz_path, 'r') as src_zip:
+            with zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as dst_zip:
+                for item in src_zip.infolist():
+                    if item.filename.lower() == 'comicinfo.xml':
+                        continue  # 跳过旧的 ComicInfo.xml
+                    data = src_zip.read(item.filename)
+                    dst_zip.writestr(item, data)
+
+                # 写入新的 ComicInfo.xml
+                dst_zip.writestr("ComicInfo.xml", xml_content)
+
+        # 替换原文件
+        os.replace(temp_path, cbz_path)
+
+        if logger:
+            logger.info(f"ComicInfo.xml 已更新: {cbz_path}")
+        return cbz_path
+
+    except Exception as e:
+        if logger:
+            logger.error(f"更新 ComicInfo.xml 失败: {e}")
+        # 清理临时文件
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        return None
+
 def extract_images_only(file_path, temp_dir):
     file_exts = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.avif', '.jxl', '.xml', '.json')
 

@@ -268,15 +268,11 @@ class HDoujinTools:
                     namespace_name = namespace_map[namespace]
                     metadata['tags'].append(f"{namespace_name}:{name}")
 
-            # 保存元数据到文件
+            # 构建 gmetadata 字典格式 (保持与其他刮削器一致)
             gmetadata = {"gmetadata": [metadata]}
-            metadata_dir = check_dirs('data/hdoujin/gmetadata/')
-            metadata_file = os.path.join(metadata_dir, f'{gallery_id}.json')
-            with open(metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(gmetadata, f, ensure_ascii=False, indent=4)
 
             if self.logger:
-                self.logger.info(f"hdoujin 元数据已保存: {metadata_file}")
+                self.logger.info(f"hdoujin 元数据解析完成: {gallery_id}")
 
             return metadata
 

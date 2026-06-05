@@ -382,12 +382,6 @@ class HitomiTools:
             if self.logger:
                 self.logger.info(f"Hitomi metadata: {json.dumps(gmetadata, ensure_ascii=False)}")
 
-            # 保存元数据
-            metadata_dir = check_dirs('data/hitomi/gmetadata/')
-            metadata_file = os.path.join(metadata_dir, f'{gallery_id}.json')
-            with open(metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(gmetadata, f, ensure_ascii=False, indent=4)
-
             return metadata
 
         except Exception as e:

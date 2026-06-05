@@ -273,9 +273,6 @@ class EHentaiTools:
             response = self.session.post(API,json=data)
             if response.status_code == 200:
                 if self.logger: self.logger.info(response.json())
-                gmetadata_dir = check_dirs(os.path.join('data', 'ehentai', 'gmetadata'))
-                with open(os.path.join(gmetadata_dir, f'{gid}.json'), 'w+', encoding='utf-8') as wf:
-                    json.dump(response.json(),wf,ensure_ascii=False,indent=4)
                 return response.json()['gmetadata'][0]
         else:
             if self.logger: self.logger.error(f'解析{url}时遇到了错误')
