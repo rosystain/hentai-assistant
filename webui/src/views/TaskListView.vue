@@ -235,54 +235,54 @@
               <div class="edit-form">
                 <div class="edit-field">
                   <label>Title</label>
-                  <input type="text" v-model="editForms[task.id].Title" />
+                  <input type="text" v-model="editForms[task.id].Title" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Title') }" />
                 </div>
                 <div class="edit-field">
                   <label>Series</label>
-                  <input type="text" v-model="editForms[task.id].Series" />
+                  <input type="text" v-model="editForms[task.id].Series" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Series') }" />
                 </div>
                 <div class="edit-field-row">
                   <div class="edit-field">
                     <label>Number</label>
-                    <input type="text" v-model="editForms[task.id].Number" />
+                    <input type="text" v-model="editForms[task.id].Number" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Number') }" />
                   </div>
                   <div class="edit-field">
                     <label>LanguageISO</label>
-                    <input type="text" v-model="editForms[task.id].LanguageISO" />
+                    <input type="text" v-model="editForms[task.id].LanguageISO" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'LanguageISO') }" />
                   </div>
                 </div>
                 <div class="edit-field-row">
                   <div class="edit-field">
                     <label>Writer</label>
-                    <input type="text" v-model="editForms[task.id].Writer" />
+                    <input type="text" v-model="editForms[task.id].Writer" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Writer') }" />
                   </div>
                   <div class="edit-field">
                     <label>Penciller</label>
-                    <input type="text" v-model="editForms[task.id].Penciller" />
+                    <input type="text" v-model="editForms[task.id].Penciller" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Penciller') }" />
                   </div>
                 </div>
                 <div class="edit-field">
                   <label>Tags</label>
-                  <textarea v-model="editForms[task.id].Tags" rows="2" placeholder="逗号分隔"></textarea>
+                  <textarea v-model="editForms[task.id].Tags" rows="2" placeholder="逗号分隔" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Tags') }"></textarea>
                 </div>
                 <div class="edit-field-row">
                   <div class="edit-field">
                     <label>Genre</label>
-                    <input type="text" v-model="editForms[task.id].Genre" />
+                    <input type="text" v-model="editForms[task.id].Genre" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Genre') }" />
                   </div>
                   <div class="edit-field">
                     <label>Translator</label>
-                    <input type="text" v-model="editForms[task.id].Translator" />
+                    <input type="text" v-model="editForms[task.id].Translator" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Translator') }" />
                   </div>
                 </div>
                 <div class="edit-field-row">
                   <div class="edit-field">
                     <label>AgeRating</label>
-                    <input type="text" v-model="editForms[task.id].AgeRating" />
+                    <input type="text" v-model="editForms[task.id].AgeRating" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'AgeRating') }" />
                   </div>
                   <div class="edit-field">
                     <label>Manga</label>
-                    <select v-model="editForms[task.id].Manga">
+                    <select v-model="editForms[task.id].Manga" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Manga') }">
                       <option value="">未设置</option>
                       <option value="YesAndRightToLeft">从右到左</option>
                       <option value="Yes">从左到右</option>
@@ -293,23 +293,31 @@
                 <div class="edit-field-row">
                   <div class="edit-field">
                     <label>AlternateSeries</label>
-                    <input type="text" v-model="editForms[task.id].AlternateSeries" />
+                    <input type="text" v-model="editForms[task.id].AlternateSeries" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'AlternateSeries') }" />
                   </div>
                   <div class="edit-field">
                     <label>AlternateNumber</label>
-                    <input type="text" v-model="editForms[task.id].AlternateNumber" />
+                    <input type="text" v-model="editForms[task.id].AlternateNumber" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'AlternateNumber') }" />
                   </div>
                 </div>
                 <div class="edit-field">
                   <label>SeriesGroup</label>
-                  <input type="text" v-model="editForms[task.id].SeriesGroup" />
+                  <input type="text" v-model="editForms[task.id].SeriesGroup" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'SeriesGroup') }" />
                 </div>
                 <div class="edit-field">
                   <label>Summary</label>
-                  <textarea v-model="editForms[task.id].Summary" rows="3"></textarea>
+                  <textarea v-model="editForms[task.id].Summary" rows="3" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Summary') }"></textarea>
                 </div>
               </div>
               <div class="edit-actions">
+                <button
+                  @click="readFromCbz(task.id)"
+                  :disabled="readingCbz[task.id]"
+                  class="read-button"
+                  title="从物理压缩包中重新读取 ComicInfo.xml"
+                >
+                  {{ readingCbz[task.id] ? '读取中...' : '从文件读取' }}
+                </button>
                 <button
                   @click="saveMetadata(task.id)"
                   :disabled="savingMetadata[task.id]"
@@ -421,6 +429,7 @@ const expandedLogs = ref<{ [key: string]: boolean }>({});
 const stoppingTasks = ref<{ [key: string]: boolean }>({});
 const retryingTasks = ref<{ [key: string]: boolean }>({});
 const deletingTasks = ref<{ [key: string]: boolean }>({});
+
 const currentFilter = ref<string>('all'); // 当前选中的过滤器
 const clearing = ref(false); // 清除任务状态
 const searchQuery = ref<string>(''); // 搜索查询
@@ -433,6 +442,7 @@ const { isDark } = useTheme();
 const editingTasks = ref<{ [key: string]: boolean }>({});
 const editForms = ref<{ [key: string]: Record<string, any> }>({});
 const savingMetadata = ref<{ [key: string]: boolean }>({});
+const readingCbz = ref<{ [key: string]: boolean }>({});
 const movingTasks = ref<{ [key: string]: boolean }>({});
 
 // 分页相关状态
@@ -1335,6 +1345,60 @@ const toggleEditPanel = (task: Task) => {
     };
   }
   editingTasks.value[taskId] = true;
+};
+
+// 从物理文件读取元数据
+const readFromCbz = async (taskId: string) => {
+  readingCbz.value[taskId] = true;
+  try {
+    const response = await axios.post(`${API_BASE_URL}/tasks/${taskId}/read-cbz`);
+    showNotification('成功读取物理文件中的元数据，请检查差异并保存', 'success');
+
+    if (response.data.comicinfo) {
+      const cbzMeta = response.data.comicinfo;
+      
+      editForms.value[taskId] = {
+        Title: cbzMeta.Title || '',
+        Series: cbzMeta.Series || '',
+        Number: cbzMeta.Number || '',
+        Writer: cbzMeta.Writer || '',
+        Penciller: cbzMeta.Penciller || '',
+        Tags: cbzMeta.Tags || '',
+        LanguageISO: cbzMeta.LanguageISO || '',
+        Genre: cbzMeta.Genre || '',
+        Translator: cbzMeta.Translator || '',
+        AgeRating: cbzMeta.AgeRating || '',
+        Manga: cbzMeta.Manga || '',
+        AlternateSeries: cbzMeta.AlternateSeries || '',
+        AlternateNumber: cbzMeta.AlternateNumber || '',
+        SeriesGroup: cbzMeta.SeriesGroup || '',
+        Summary: cbzMeta.Summary || '',
+      };
+    }
+  } catch (err: any) {
+    console.error(`读取文件失败:`, err);
+    showNotification(`读取文件失败: ${err.response?.data?.error || err.message}`, 'error');
+  } finally {
+    readingCbz.value[taskId] = false;
+  }
+};
+
+// 检查当前表单值与数据库原始值是否有差异
+const isFieldDifferent = (taskId: string, fieldName: string) => {
+  const task = tasks.value.find(t => t.id === taskId);
+  if (!task || !editingTasks.value[taskId]) return false;
+  
+  let metaFinal: any = {};
+  try {
+    metaFinal = typeof task.comicinfo === 'string' 
+      ? JSON.parse(task.comicinfo) 
+      : (task.comicinfo || {});
+  } catch (e) {}
+
+  // 特殊处理未设置的情况，统一视作空字符串
+  const originalValue = String(metaFinal[fieldName] || '').trim();
+  const currentValue = String(editForms.value[taskId]?.[fieldName] || '').trim();
+  return originalValue !== currentValue;
 };
 
 // 保存元数据
@@ -3204,5 +3268,20 @@ h1 {
 
 .confirm-dialog.dark-dialog #confirm-btn:hover {
   background: rgba(220, 53, 69, 0.9) !important;
+}
+
+/* 差异高亮效果 */
+.diff-highlight {
+  border-color: #dc3545 !important;
+  outline: 1px solid #dc3545 !important;
+  background-color: rgba(220, 53, 69, 0.05) !important;
+  box-shadow: 0 0 5px rgba(220, 53, 69, 0.3);
+  transition: all 0.3s ease;
+}
+
+.dark .diff-highlight {
+  border-color: #ff4d4d !important;
+  outline: 1px solid #ff4d4d !important;
+  background-color: rgba(255, 77, 77, 0.15) !important;
 }
 </style>

@@ -947,3 +947,38 @@ def move_task_file(task_id):
         if global_logger:
             global_logger.error(f"Error moving task file {task_id}: {e}")
         return json_response({'error': f'Failed to move file: {str(e)}'}), 500
+
+@bp.route('/api/tasks/<task_id>/read-cbz', methods=['POST'])
+def read_cbz_metadata(task_id):
+    """从已完成的 CBZ 文件中重新读取并同步 ComicInfo.xml 元数据"""
+    import os
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    from database import task_db
+    task_info = task_db.get_task(task_id)
+    if not task_info:
+        return json_response({'error': 'Task not found'}), 404
+
+    cbz_path = task_info.get('output_path')
+    if not cbz_path or not os.path.exists(cbz_path):
+        return json_response({'error': '对应的物理压缩包文件不存在'}), 404
+
+    comicinfo_dict = {}
+    try:
+        with zipfile.ZipFile(cbz_path, 'r') as zf:
+            if 'ComicInfo.xml' in zf.namelist():
+                xml_content = zf.read('ComicInfo.xml')
+                root = ET.fromstring(xml_content)
+                for child in root:
+                    # 获取标签名，处理可能有命名空间的情况
+                    tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                    if child.text:
+                        comicinfo_dict[tag] = child.text
+            else:
+                return json_response({'error': '压缩包中未找到 ComicInfo.xml'}), 404
+    except Exception as e:
+        return json_response({'error': f'读取文件失败: {str(e)}'}), 500
+
+    # 不更新数据库，只返回解析出的字典供前端比对
+    return json_response({'comicinfo': comicinfo_dict})
