@@ -26,7 +26,7 @@
                 <h2>{{ getSectionLabel(section.name) }}</h2>
                 <div>
                   <div v-for="field in section.orderedFields" :key="field.key" class="config-item" :class="{ 'config-item-inline': isBooleanField(section.name, field.key) }">
-                    <div class="config-label-group">
+                    <div :class="['config-label-group', { 'config-label-group-inline': section.name === 'comicinfo' }]">
                       <label :for="`${section.name}-${field.key}`">{{ getFieldLabel(section.name, field.key) }}</label>
                       <span v-if="getFieldDescription(section.name, field.key)" class="config-description">
                         {{ getFieldDescription(section.name, field.key) }}
@@ -489,6 +489,12 @@ h2 {
   flex-direction: column;
   gap: 2px;
   flex: 1;
+}
+
+.config-label-group-inline {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .config-label-group > label {
