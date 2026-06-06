@@ -47,7 +47,8 @@
 
     <!-- 状态过滤器 -->
     <div class="filter-controls">
-      <div class="status-filters">
+      <!-- 桌面端：按钮组 -->
+      <div class="status-filters status-filters-desktop">
         <button
           v-for="filter in statusFilters"
           :key="filter.key"
@@ -59,15 +60,42 @@
         </button>
       </div>
 
-      <!-- 清除记录按钮 -->
+      <!-- 移动端：下拉选择 -->
+      <div class="status-filters-mobile">
+        <select
+          :value="currentFilter"
+          @change="setStatusFilter(($event.target as HTMLSelectElement).value)"
+          class="filter-select"
+        >
+          <option
+            v-for="filter in statusFilters"
+            :key="filter.key"
+            :value="filter.key"
+          >
+            {{ filter.label }} ({{ getTaskCount(filter.key) }})
+          </option>
+        </select>
+      </div>
+
+      <!-- 操作按钮区 -->
       <div class="action-controls">
-        <div class="clear-controls" v-if="currentFilter !== 'in-progress'">
+        <div class="batch-move-controls" v-if="filteredMovableTasks.length > 0">
+          <button
+            @click="openBatchMoveModal"
+            class="batch-move-button"
+            :title="'批量移动文件 (' + filteredMovableTasks.length + ')'"
+          >
+            <ArrowRightLeft :size="16" />
+          </button>
+        </div>
+        <div class="clear-controls" v-if="showClearButton">
           <button
             @click="confirmClearTasks"
-            :disabled="paginatedTasks.length === 0 || clearing"
+            :disabled="clearing"
             class="clear-button"
+            title="清除所有失败和已取消的任务记录"
           >
-            {{ clearing ? '清除中...' : '清除记录' }}
+            <Trash2 :size="16" />
           </button>
         </div>
       </div>
@@ -80,13 +108,6 @@
         {{ getEmptyMessage() }}
       </div>
       <div v-else>
-        <!-- 任务统计信息 -->
-        <div class="task-stats">
-          <span>共 {{ pagination.total }} 个任务</span>
-          <span v-if="pagination.total_pages > 1">
-            (第 {{ pagination.page }} / {{ pagination.total_pages }} 页)
-          </span>
-        </div>
 
         <div class="task-cards" :key="taskListKey">
           <div v-for="task in paginatedTasks" :key="task.id" class="task-card">
@@ -155,15 +176,6 @@
                     class="edit-button"
                   >
                     {{ editingTasks[task.id] ? '关闭编辑' : '编辑文件' }}
-                  </button>
-                  <button
-                    v-if="task.has_path_difference"
-                    @click="showMoveDialog(task)"
-                    :disabled="movingTasks[task.id]"
-                    class="move-button"
-                    title="移动文件到符合命名模板的新位置"
-                  >
-                    {{ movingTasks[task.id] ? '移动中...' : '移动文件' }}
                   </button>
                   <button
                     v-if="task.status === '错误' || task.status === '取消'"
@@ -329,14 +341,17 @@
                 >
                   {{ readingCbz[task.id] ? '读取中...' : '读取压缩包' }}
                 </button>
-                <button
-                  @click="saveMetadata(task.id)"
-                  :disabled="savingMetadata[task.id] || !hasAnyFieldChanged(task.id)"
-                  class="save-button"
-                  :title="!hasAnyFieldChanged(task.id) ? '未检测到修改' : ''"
-                >
-                  {{ savingMetadata[task.id] ? '保存中...' : '保存修改' }}
-                </button>
+                <div class="edit-actions-right">
+
+                  <button
+                    @click="saveMetadata(task.id)"
+                    :disabled="savingMetadata[task.id] || !hasAnyFieldChanged(task.id)"
+                    class="save-button"
+                    :title="!hasAnyFieldChanged(task.id) ? '未检测到修改' : ''"
+                  >
+                    {{ savingMetadata[task.id] ? '保存中...' : '保存修改' }}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -392,12 +407,111 @@
         </div>
       </div>
     </div>
+
+    <!-- 批量移动弹窗 -->
+    <div v-if="showBatchMoveModal" class="batch-move-modal-overlay" @click.self="closeBatchMoveModal">
+      <div class="batch-move-modal">
+        <div class="modal-header">
+          <h3>批量移动文件</h3>
+          <button @click="closeBatchMoveModal" :disabled="batchMoving" class="close-modal-btn">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-description">以下文件当前的物理路径与系统配置的命名模板不一致，可以自动移动到规范路径。</p>
+          
+          <div v-if="batchMoving" class="batch-progress-bar">
+            <div class="progress-fill" :style="{ width: batchMoveProgress + '%' }"></div>
+            <span class="progress-text">{{ batchMoveProgress }}%</span>
+          </div>
+
+          <div class="movable-list">
+            <div v-for="task in filteredMovableTasks" :key="task.id" class="movable-item">
+              <label class="movable-checkbox">
+                <input type="checkbox" v-model="selectedMovableTasks[task.id]" :disabled="batchMoving">
+                <span class="checkmark"></span>
+              </label>
+              <div class="movable-details">
+                <div class="movable-filename" :title="task.filename">{{ task.filename }}</div>
+                <div class="movable-path movable-path-old" :title="task.current_path">
+                  <span class="path-label">当前:</span>
+                  <div class="movable-path-scroll">{{ getAbbreviatedPath(task.current_path, task.target_path || task.suggested_path) }}</div>
+                </div>
+                <div class="movable-path movable-path-new" :title="task.target_path || task.suggested_path">
+                  <span class="path-label">目标:</span>
+                  <div class="movable-path-scroll">{{ getAbbreviatedPath(task.target_path || task.suggested_path, task.current_path) }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div class="selection-info">
+            已选择 {{ Object.values(selectedMovableTasks).filter(v => v).length }} / {{ filteredMovableTasks.length }} 个文件
+          </div>
+          <div class="modal-actions">
+            <button @click="closeBatchMoveModal" :disabled="batchMoving" class="modal-btn cancel-btn">取消</button>
+            <button 
+              @click="executeBatchMove" 
+              :disabled="batchMoving || Object.values(selectedMovableTasks).filter(v => v).length === 0" 
+              class="modal-btn confirm-btn"
+            >
+              {{ batchMoving ? '移动中...' : '开始移动' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 单文件移动提示弹窗 -->
+    <div v-if="showSingleMoveModal" class="batch-move-modal-overlay">
+      <div class="batch-move-modal">
+        <div class="modal-header">
+          <h3>文件移动确认</h3>
+          <button @click="closeSingleMoveModal" class="close-modal-btn">&times;</button>
+        </div>
+        <div class="modal-content" style="padding: 20px;">
+          <div class="modal-description" style="font-size: 1.05em; line-height: 1.6; margin-bottom: 24px; margin-top: 5px;">
+            <strong style="color: #28a745; font-size: 1.1em;">✓ 元数据保存成功</strong>
+            <div style="margin-top: 12px; color: var(--text-color);">
+              检测到当前文件的归档路径由于元数据的改变需要发生变化，是否立即移动文件？
+            </div>
+            <div style="margin-top: 6px; font-size: 0.85em; opacity: 0.7;">
+              选择“稍后处理”将放入待转移队列，之后可通过“批量移动”统一处理
+            </div>
+          </div>
+          <div class="movable-item" style="margin-top: 15px;">
+            <div class="movable-details">
+              <div class="movable-path movable-path-old" :title="singleMoveData.current_path">
+                <span class="path-label">当前:</span>
+                <div class="movable-path-scroll">{{ getAbbreviatedPath(singleMoveData.current_path, singleMoveData.suggested_path) }}</div>
+              </div>
+              <div class="movable-path movable-path-new" :title="singleMoveData.suggested_path" style="margin-bottom: 0;">
+                <span class="path-label">目标:</span>
+                <div class="movable-path-scroll">{{ getAbbreviatedPath(singleMoveData.suggested_path, singleMoveData.current_path) }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div class="selection-info"></div>
+          <div class="modal-actions">
+            <button @click="closeSingleMoveModal" :disabled="singleMoveData.moving" class="modal-btn cancel-btn">稍后处理</button>
+            <button 
+              @click="confirmSingleMove" 
+              :disabled="singleMoveData.moving" 
+              class="modal-btn confirm-btn"
+            >
+              {{ singleMoveData.moving ? '移动中...' : '立即移动' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import axios from 'axios';
+import { Trash2, ArrowRightLeft } from '@lucide/vue';
 import { useTheme } from '@/composables/useTheme';
 
 // 通知系统
@@ -456,7 +570,111 @@ const editingTasks = ref<{ [key: string]: boolean }>({});
 const editForms = ref<{ [key: string]: Record<string, any> }>({});
 const savingMetadata = ref<{ [key: string]: boolean }>({});
 const readingCbz = ref<{ [key: string]: boolean }>({});
-const movingTasks = ref<{ [key: string]: boolean }>({});
+
+
+// 批量移动相关状态
+const movableTasksList = ref<any[]>([]);
+const showBatchMoveModal = ref(false);
+const batchMoving = ref(false);
+const batchMoveProgress = ref(0);
+const selectedMovableTasks = ref<{ [key: string]: boolean }>({});
+
+// 单文件移动弹窗相关状态
+const showSingleMoveModal = ref(false);
+const singleMoveData = ref({
+  taskId: '',
+  current_path: '',
+  suggested_path: '',
+  moving: false
+});
+
+const closeSingleMoveModal = () => {
+  if (!singleMoveData.value.moving) {
+    showSingleMoveModal.value = false;
+    // 如果用户关闭或选稍后处理，刷新待移动列表
+    lastMovableTasksCheck = 0;
+    fetchMovableTasks();
+  }
+};
+
+const confirmSingleMove = async () => {
+  singleMoveData.value.moving = true;
+  try {
+    await axios.post(`${API_BASE_URL}/tasks/${singleMoveData.value.taskId}/move`, { target_path: singleMoveData.value.suggested_path });
+    showNotification('文件已成功移动归档', 'success');
+    await fetchTasks(false);
+    showSingleMoveModal.value = false;
+  } catch (err: any) {
+    console.error(`移动文件失败:`, err);
+    showNotification(`移动失败: ${err.response?.data?.error || err.message}`, 'error');
+  } finally {
+    singleMoveData.value.moving = false;
+    lastMovableTasksCheck = 0;
+    fetchMovableTasks();
+  }
+};
+
+// 联动过滤后的可移动任务
+const filteredMovableTasks = computed(() => {
+  if (currentFilter.value !== 'all' && currentFilter.value !== 'completed') {
+    return [];
+  }
+  let list = movableTasksList.value;
+  if (searchQuery.value.trim()) {
+    const query = searchQuery.value.trim().toLowerCase();
+    list = list.filter(t => 
+      t.filename?.toLowerCase().includes(query) || 
+      t.current_path?.toLowerCase().includes(query)
+    );
+  }
+  return list;
+});
+
+// 联动显示的清除记录按钮
+const showClearButton = computed(() => {
+  // 如果没有任何失败或取消的任务（该统计已经受搜索条件联动影响），则隐藏
+  const count = getTaskCount('failed') + getTaskCount('cancelled');
+  if (count === 0) return false;
+  
+  // 如果当前视图下看不到失败或取消的任务，也隐藏
+  if (currentFilter.value === 'completed' || currentFilter.value === 'in-progress') {
+    return false;
+  }
+  
+  return true;
+});
+
+const openBatchMoveModal = () => {
+  // 默认全选
+  const selection: { [key: string]: boolean } = {};
+  filteredMovableTasks.value.forEach(t => selection[t.id] = true);
+  selectedMovableTasks.value = selection;
+  showBatchMoveModal.value = true;
+};
+const closeBatchMoveModal = () => {
+  if (!batchMoving.value) showBatchMoveModal.value = false;
+};
+
+// 路径格式化逻辑：省略两个路径中完全相同的前缀部分
+const getCommonPrefixLength = (str1: string, str2: string) => {
+  let i = 0;
+  while (i < str1.length && i < str2.length && str1[i] === str2[i]) {
+    i++;
+  }
+  // 尽量在目录边界（/）处截断
+  const lastSlash = str1.lastIndexOf('/', i);
+  return lastSlash > -1 ? lastSlash + 1 : i;
+};
+
+const getAbbreviatedPath = (path?: string, otherPath?: string) => {
+  if (!path || !otherPath) return path || '';
+  const commonLen = getCommonPrefixLength(path, otherPath);
+  // 如果共同前缀足够长（例如包含基础路径），则用 .../ 替代
+  if (commonLen > 10) {
+    return '.../' + path.substring(commonLen);
+  }
+  return path;
+};
 
 // 分页相关状态
 const pagination = ref({
@@ -554,7 +772,63 @@ const fetchTasks = async (isInitialLoad = false) => {
     } else {
       refreshing.value = false;
     }
+    
+    const now = Date.now();
+    // 初始加载或每30秒检查一次可移动任务
+    if (isInitialLoad || now - lastMovableTasksCheck > 30000) {
+      lastMovableTasksCheck = now;
+      fetchMovableTasks();
+    }
   }
+};
+
+let lastMovableTasksCheck = 0;
+const fetchMovableTasks = async () => {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/tasks/movable`);
+    movableTasksList.value = response.data.movable_tasks || [];
+  } catch (err) {
+    console.error("获取可移动任务列表失败:", err);
+  }
+};
+
+const executeBatchMove = async () => {
+  const tasksToMove = filteredMovableTasks.value.filter(t => selectedMovableTasks.value[t.id]);
+  if (tasksToMove.length === 0) {
+    showNotification('请至少选择一个要移动的文件', 'warning');
+    return;
+  }
+  
+  batchMoving.value = true;
+  batchMoveProgress.value = 0;
+  
+  let successCount = 0;
+  let failCount = 0;
+  
+  for (let i = 0; i < tasksToMove.length; i++) {
+    const task = tasksToMove[i];
+    try {
+      const targetPath = task.target_path || task.suggested_path;
+      await axios.post(`${API_BASE_URL}/tasks/${task.id}/move`, { target_path: targetPath });
+      successCount++;
+    } catch (err: any) {
+      console.error(`移动任务 ${task.id} 失败:`, err);
+      failCount++;
+    }
+    batchMoveProgress.value = Math.round(((i + 1) / tasksToMove.length) * 100);
+  }
+  
+  batchMoving.value = false;
+  showBatchMoveModal.value = false;
+  
+  if (failCount > 0) {
+    showNotification(`批量移动完成: ${successCount} 成功, ${failCount} 失败`, 'warning', 5000);
+  } else {
+    showNotification(`成功移动了 ${successCount} 个文件`, 'success');
+  }
+  
+  lastMovableTasksCheck = 0; // Force refresh
+  await fetchTasks(true);
 };
 
 const toggleLog = (taskId: string) => {
@@ -1263,48 +1537,38 @@ const getEmptyMessage = (): string => {
   }
 };
 
-// 确认清除任务
+// 确认清除任务（固定清除失败+取消状态的任务）
 const confirmClearTasks = async () => {
-  let statusToClear: string;
-  let statusName: string;
+  const failedCount = getTaskCount('failed');
+  const cancelledCount = getTaskCount('cancelled');
+  const total = failedCount + cancelledCount;
+  if (total === 0) return;
 
-  if (currentFilter.value === 'completed') {
-    statusToClear = 'completed';
-    statusName = '已完成';
-  } else if (currentFilter.value === 'cancelled') {
-    statusToClear = 'cancelled';
-    statusName = '取消';
-  } else if (currentFilter.value === 'failed') {
-    statusToClear = 'failed';
-    statusName = '失败';
-  } else if (currentFilter.value === 'all') {
-    statusToClear = 'all_except_in_progress';
-    statusName = '全部（除进行中任务外）';
-  } else {
-    return;
-  }
+  const details: string[] = [];
+  if (failedCount > 0) details.push(`${failedCount} 个失败`);
+  if (cancelledCount > 0) details.push(`${cancelledCount} 个已取消`);
 
-  const confirmed = await showConfirmDialog(`确定要清除所有${statusName}的任务记录吗？此操作不可撤销。`);
+  const confirmed = await showConfirmDialog(
+    `确定要清除 ${details.join(' 和 ')} 的任务记录吗？此操作不可撤销。`
+  );
   if (confirmed) {
-    clearTasks(statusToClear);
+    clearing.value = true;
+    try {
+      // 分别清除失败和取消的任务
+      if (failedCount > 0) await axios.post(`${API_BASE_URL}/tasks/clear?status=failed`);
+      if (cancelledCount > 0) await axios.post(`${API_BASE_URL}/tasks/clear?status=cancelled`);
+      pagination.value.page = 1;
+      await fetchTasks(false);
+    } catch (err: any) {
+      console.error('清除任务失败:', err);
+      showNotification(`清除任务失败: ${err.response?.data?.message || err.message}`, 'error');
+    } finally {
+      clearing.value = false;
+    }
   }
 };
 
-// 清除特定状态的任务
-const clearTasks = async (status: string) => {
-  clearing.value = true;
-  try {
-    await axios.post(`${API_BASE_URL}/tasks/clear?status=${status}`);
-    // 清除成功后重置到第一页并刷新任务列表
-    pagination.value.page = 1;
-    await fetchTasks(false);
-  } catch (err: any) {
-    console.error(`清除任务失败:`, err);
-    showNotification(`清除任务失败: ${err.response?.data?.message || err.message}`, 'error');
-  } finally {
-    clearing.value = false;
-  }
-};
+
 
 // 智能刷新管理
 const startSmartRefresh = () => {
@@ -1514,6 +1778,23 @@ const saveMetadata = async (taskId: string) => {
         tasks.value[index] = { ...tasks.value[index], ...response.data.task };
       }
     }
+
+    // 检查路径是否有变化
+    try {
+      const pathCheckRes = await axios.get(`${API_BASE_URL}/tasks/${taskId}/move-path`);
+      if (pathCheckRes.data.has_difference) {
+        const { current_path, suggested_path } = pathCheckRes.data;
+        singleMoveData.value = {
+          taskId,
+          current_path,
+          suggested_path,
+          moving: false
+        };
+        showSingleMoveModal.value = true;
+      }
+    } catch (err) {
+      console.error("检查移动路径失败", err);
+    }
   } catch (err: any) {
     console.error(`保存元数据失败:`, err);
     showNotification(`保存失败: ${err.response?.data?.error || err.message}`, 'error');
@@ -1522,54 +1803,7 @@ const saveMetadata = async (taskId: string) => {
   }
 };
 
-// 显示移动对话框
-const showMoveDialog = async (task: Task) => {
-  movingTasks.value[task.id] = true;
-  try {
-    // 1. 获取后端渲染出来的建议归类新路径
-    const response = await axios.get(`${API_BASE_URL}/tasks/${task.id}/move-path`);
-    const { current_path, suggested_path, has_difference } = response.data;
-    
-    if (!suggested_path) {
-      showNotification('未能根据配置渲染归类路径，请检查 MOVE_PATH 配置。', 'error');
-      return;
-    }
-    
-    if (!has_difference) {
-      alert(`当前文件位置已符合归档配置，无需移动。\n\n当前路径：\n${current_path}`);
-      return;
-    }
-    
-    // 2. 路径不一致，提示确认
-    const confirmed = confirm(
-      `检测到归类路径差异。是否将文件移动到新的归档位置？\n\n当前路径：\n${current_path}\n\n新归档路径：\n${suggested_path}`
-    );
-    
-    if (confirmed) {
-      await moveTaskFile(task.id, suggested_path);
-    }
-  } catch (err: any) {
-    console.error(`获取移动建议路径失败:`, err);
-    showNotification(`获取建议移动路径失败: ${err.response?.data?.error || err.message}`, 'error');
-  } finally {
-    movingTasks.value[task.id] = false;
-  }
-};
 
-// 移动文件
-const moveTaskFile = async (taskId: string, targetPath?: string) => {
-  movingTasks.value[taskId] = true;
-  try {
-    await axios.post(`${API_BASE_URL}/tasks/${taskId}/move`, { target_path: targetPath });
-    showNotification('文件已成功移动归档', 'success');
-    await fetchTasks(false);
-  } catch (err: any) {
-    console.error(`移动文件失败:`, err);
-    showNotification(`移动失败: ${err.response?.data?.error || err.message}`, 'error');
-  } finally {
-    movingTasks.value[taskId] = false;
-  }
-};
 
 // 格式化操作状态
 const formatOpStatus = (status: string): string => {
@@ -2069,8 +2303,14 @@ h1 {
   flex-wrap: wrap;
 }
 
-.save-button {
+.edit-actions-right {
+  display: flex;
+  gap: 10px;
   margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.save-button {
   padding: 8px 16px;
   border: none;
   border-radius: 5px;
@@ -2120,30 +2360,7 @@ h1 {
   box-shadow: none;
 }
 
-.move-button {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 0.9em;
-  transition: all 0.3s ease;
-  background: linear-gradient(135deg, #6f42c1, #5a2d91);
-  color: white;
-  font-weight: 500;
-}
 
-.move-button:hover:not(:disabled) {
-  background: linear-gradient(135deg, #5a2d91, #4a2577);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(111, 66, 193, 0.3);
-}
-
-.move-button:disabled {
-  background: #cccccc;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
-}
 
 .pending-indicator {
   margin-top: 10px;
@@ -2189,7 +2406,7 @@ h1 {
   flex-wrap: wrap;
 }
 
-.log-button, .stop-button, .retry-button, .gallery-button, .refresh-button, .move-button, .edit-button {
+.log-button, .stop-button, .retry-button, .gallery-button, .refresh-button, .edit-button {
   padding: 8px 15px;
   border: none;
   border-radius: 5px;
@@ -2373,6 +2590,8 @@ h1 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-bottom: 20px;
   padding: 15px;
   background-color: #f8f9fa;
@@ -2383,6 +2602,35 @@ h1 {
 .status-filters {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* 桌面端显示按钮组，隐藏下拉框 */
+.status-filters-mobile {
+  display: none;
+}
+
+.filter-select {
+  padding: 8px 32px 8px 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 5px;
+  background-color: white;
+  color: #495057;
+  font-size: 0.9em;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23495057' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  min-width: 160px;
+  width: auto;
+  max-width: 100%;
+}
+
+.filter-select:focus {
+  border-color: #007bff;
+  outline: none;
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
 }
 
 .filter-button {
@@ -2475,25 +2723,31 @@ h1 {
 }
 
 .clear-button {
-  padding: 8px 16px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
   border: none;
-  border-radius: 5px;
+  border-radius: 8px;
   background-color: #dc3545;
   color: white;
   cursor: pointer;
-  transition: all 0.3s ease;
-  font-size: 0.9em;
+  transition: all 0.2s ease;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .clear-button:hover:not(:disabled) {
   background-color: #c82333;
+  transform: scale(1.05);
 }
 
 .clear-button:disabled {
   background-color: #6c757d;
-  border-color: #6c757d;
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
 .info-message, .error-message, .loading-message {
@@ -2840,8 +3094,31 @@ h1 {
 </style>
 
 <style scoped>
-/* 移动端响应式设计 */
+/* 筛选栏响应式：较早折叠为下拉框 */
 @media (max-width: 768px) {
+  .filter-controls {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .status-filters-desktop {
+    display: none;
+  }
+
+  .status-filters-mobile {
+    display: block;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .action-controls {
+    flex-shrink: 0;
+  }
+}
+
+/* 整体布局响应式 */
+@media (max-width: 576px) {
   .task-list-view {
     padding: 15px;
   }
@@ -2851,12 +3128,6 @@ h1 {
     margin-bottom: 20px;
   }
 
-  .filter-controls {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 15px;
-  }
-
   .search-section {
     margin-bottom: 15px;
   }
@@ -2864,16 +3135,6 @@ h1 {
   .search-input-container {
     max-width: none;
     width: 100%;
-  }
-
-  .action-controls {
-    flex-direction: column;
-    gap: 8px;
-  }
-
-
-  .status-filters {
-    justify-content: center;
   }
 
   .filter-button {
@@ -3141,6 +3402,23 @@ h1 {
   color: var(--white-color);
 }
 
+.dark .filter-select {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: var(--text-color-light);
+  border-color: var(--border-color);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23adb5bd' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+}
+
+.dark .filter-select:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.3);
+}
+
+.dark .filter-select option {
+  background-color: #212529;
+  color: var(--text-color-light);
+}
+
 .dark .task-stats {
   background-color: rgba(255, 255, 255, 0.05);
   color: var(--text-color-light);
@@ -3361,5 +3639,329 @@ h1 {
   border-color: #ff4d4d !important;
   outline: 1px solid #ff4d4d !important;
   background-color: rgba(255, 77, 77, 0.15) !important;
+}
+
+/* 批量移动按钮 */
+.batch-move-controls {
+  display: flex;
+  align-items: center;
+}
+
+.batch-move-button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #6f42c1, #5a2d91);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.2s ease;
+}
+
+.batch-move-button:hover {
+  background: linear-gradient(135deg, #5a2d91, #4a2577);
+  transform: scale(1.05);
+}
+
+.dark .batch-move-button {
+  background: linear-gradient(135deg, #8540f5, #6f42c1);
+}
+
+.dark .batch-move-button:hover {
+  background: linear-gradient(135deg, #6f42c1, #5a2d91);
+}
+
+/* 批量移动弹窗 */
+.batch-move-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.batch-move-modal {
+  background-color: white;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 700px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.dark .batch-move-modal {
+  background-color: var(--card-bg, #212529);
+  color: var(--text-color-light, #f8f9fa);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dark .modal-header {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.2em;
+}
+
+.close-modal-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.2em;
+  cursor: pointer;
+  color: #666;
+  padding: 4px;
+}
+
+.dark .close-modal-btn {
+  color: #aaa;
+}
+
+.close-modal-btn:hover {
+  color: #000;
+}
+
+.dark .close-modal-btn:hover {
+  color: #fff;
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-description {
+  margin-top: 0;
+  margin-bottom: 15px;
+  color: #555;
+  font-size: 0.95em;
+}
+
+.dark .modal-description {
+  color: #bbb;
+}
+
+.batch-progress-bar {
+  height: 20px;
+  background-color: #e9ecef;
+  border-radius: 10px;
+  margin-bottom: 15px;
+  overflow: hidden;
+  position: relative;
+}
+
+.dark .batch-progress-bar {
+  background-color: #343a40;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #28a745;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 0.8em;
+  color: #fff;
+  text-shadow: 0 0 2px rgba(0,0,0,0.5);
+}
+
+.movable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.movable-item {
+  display: flex;
+  gap: 15px;
+  padding: 12px;
+  background-color: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  align-items: flex-start;
+}
+
+.dark .movable-item {
+  background-color: rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.movable-checkbox {
+  margin-top: 4px;
+}
+
+.movable-details {
+  flex: 1;
+  min-width: 0; /* allows text truncation */
+}
+
+.movable-filename {
+  font-weight: 600;
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.movable-path {
+  display: flex;
+  align-items: center;
+  font-family: monospace;
+  font-size: 0.85em;
+  padding: 6px;
+  border-radius: 4px;
+  margin-bottom: 6px;
+}
+
+.movable-path-scroll {
+  white-space: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+  flex: 1;
+}
+
+.movable-path-scroll::-webkit-scrollbar {
+  display: none; /* WebKit */
+}
+
+.path-label {
+  font-weight: bold;
+  margin-right: 5px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.dark .path-label {
+  color: #aaa;
+}
+
+.movable-path-old {
+  background-color: rgba(220, 53, 69, 0.1);
+  color: #dc3545;
+}
+
+.dark .movable-path-old {
+  background-color: rgba(220, 53, 69, 0.15);
+  color: #ff6b7a;
+}
+
+.movable-path-new {
+  background-color: rgba(40, 167, 69, 0.1);
+  color: #28a745;
+}
+
+.dark .movable-path-new {
+  background-color: rgba(40, 167, 69, 0.15);
+  color: #4cd964;
+}
+
+.modal-footer {
+  padding: 16px 20px;
+  border-top: 1px solid #eee;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #f8f9fa;
+}
+
+.dark .modal-footer {
+  border-top-color: rgba(255, 255, 255, 0.1);
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.selection-info {
+  font-size: 0.9em;
+  color: #666;
+}
+
+.dark .selection-info {
+  color: #aaa;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.modal-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.modal-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cancel-btn {
+  background-color: #e9ecef;
+  color: #495057;
+}
+
+.cancel-btn:hover:not(:disabled) {
+  background-color: #dde2e6;
+}
+
+.dark .cancel-btn {
+  background-color: #495057;
+  color: #f8f9fa;
+}
+
+.dark .cancel-btn:hover:not(:disabled) {
+  background-color: #5c636a;
+}
+
+.confirm-btn {
+  background-color: #007bff;
+  color: white;
+}
+
+.confirm-btn:hover:not(:disabled) {
+  background-color: #0056b3;
+}
+
+.dark .confirm-btn {
+  background-color: #0d6efd;
+}
+
+.dark .confirm-btn:hover:not(:disabled) {
+  background-color: #0b5ed7;
 }
 </style>

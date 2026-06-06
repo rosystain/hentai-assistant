@@ -632,6 +632,37 @@ def get_tasks():
             global_logger.error(f"Error getting tasks: {e}")
         return json_response({'error': f'Failed to get tasks: {str(e)}'}), 500
 
+@bp.route('/api/tasks/movable', methods=['GET'])
+def get_movable_tasks():
+    """获取所有具有可移动归档路径差异的已完成任务"""
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        from database import task_db
+        from utils import TaskStatus
+        
+        # 获取所有完成的任务 (传入 page=1, page_size=99999)
+        db_tasks, _ = task_db.get_tasks(status_filter=TaskStatus.COMPLETED, search_query=None, page=1, page_size=99999)
+        
+        movable_tasks = []
+        for db_task in db_tasks:
+            enriched = enrich_task_data(db_task, current_app)
+            if enriched.get('has_path_difference'):
+                # 提取精简所需的信息
+                movable_tasks.append({
+                    'id': enriched['id'],
+                    'filename': enriched.get('filename', '未知文件名'),
+                    'current_path': enriched.get('output_path'),
+                    'target_path': enriched.get('target_path'),
+                    'cover_url': enriched.get('cover_url')
+                })
+                
+        return json_response({'movable_tasks': movable_tasks})
+        
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"Error getting movable tasks: {e}")
+        return json_response({'error': f'Failed to get movable tasks: {str(e)}'}), 500
+
 @bp.route('/api/tasks/<task_id>/refresh-gmetadata', methods=['POST'])
 def refresh_task_gmetadata(task_id):
     """从网络重新获取最新的 gmetadata.json"""
