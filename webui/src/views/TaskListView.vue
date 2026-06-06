@@ -116,12 +116,6 @@
                 <p class="task-id-subtitle">
                   任务ID: {{ task.id }}
                   <span :class="['status-badge-inline', statusClass(task.status)]">{{ statusText(task.status) }}</span>
-                  <button v-if="task.output_path" class="path-button" :title="task.output_path" @click="copyPath(task.output_path)">
-                    📁 路径
-                  </button>
-                  <button v-if="task.metadata" class="path-button" title="点击复制原始元数据 JSON" @click="copyRawMetadata(task.metadata, task.id)">
-                    📄 元数据
-                  </button>
                 </p>
                 <div v-if="task.comicinfo && (task.comicinfo.Genre || task.comicinfo.LanguageISO || task.comicinfo.AgeRating || task.comicinfo.Translator)" class="task-capsules">
                   <template v-if="task.comicinfo.Genre">
@@ -160,7 +154,7 @@
                     @click="toggleEditPanel(task)"
                     class="edit-button"
                   >
-                    {{ editingTasks[task.id] ? '关闭编辑' : '编辑元数据' }}
+                    {{ editingTasks[task.id] ? '关闭编辑' : '编辑文件' }}
                   </button>
                   <button
                     v-if="task.has_path_difference"
@@ -231,7 +225,17 @@
 
             <!-- 元数据编辑面板 -->
             <div v-if="editingTasks[task.id]" class="edit-panel">
-              <h4 class="edit-panel-title">编辑 ComicInfo 元数据</h4>
+              <div class="edit-panel-header">
+                <h4 class="edit-panel-title">编辑 ComicInfo 元数据</h4>
+                <div class="edit-panel-actions">
+                  <button v-if="task.output_path" class="path-button" :title="task.output_path" @click="copyPath(task.output_path)">
+                    📁 路径
+                  </button>
+                  <button v-if="task.metadata" class="path-button" title="点击复制原始元数据 JSON" @click="copyRawMetadata(task.metadata, task.id)">
+                    📄 元数据
+                  </button>
+                </div>
+              </div>
               <div class="edit-form">
                 <div class="edit-field">
                   <label>Title</label>
@@ -313,22 +317,23 @@
                 <button
                   @click="generateFromMetadata(task.id)"
                   class="read-button"
-                  title="使用原始 metadata 重新填充表单数据"
+                  title="使用 Metadata 重新构建 ComicInfo"
                 >
-                  从metadata生成
+                  从元数据生成
                 </button>
                 <button
                   @click="readFromCbz(task.id)"
                   :disabled="readingCbz[task.id]"
                   class="read-button"
-                  title="从物理压缩包中重新读取 ComicInfo.xml"
+                  title="加载压缩包中的 ComicInfo.xml"
                 >
-                  {{ readingCbz[task.id] ? '读取中...' : '从文件读取' }}
+                  {{ readingCbz[task.id] ? '读取中...' : '读取压缩包' }}
                 </button>
                 <button
                   @click="saveMetadata(task.id)"
-                  :disabled="savingMetadata[task.id]"
+                  :disabled="savingMetadata[task.id] || !hasAnyFieldChanged(task.id)"
                   class="save-button"
+                  :title="!hasAnyFieldChanged(task.id) ? '未检测到修改' : ''"
                 >
                   {{ savingMetadata[task.id] ? '保存中...' : '保存修改' }}
                 </button>
@@ -809,7 +814,7 @@ const showCopyModal = (content: string, options?: { isMetadata?: boolean, taskId
 
   // 创建标题
   const title = document.createElement('h3');
-  title.textContent = '查看元数据';
+  // title.textContent = '查看元数据';
   title.style.cssText = `margin: 0 0 16px 0; color: ${isDark ? '#ffffff' : '#333'}; font-size: 18px;`;
 
   // 创建说明文本
@@ -1449,6 +1454,16 @@ const readFromCbz = async (taskId: string) => {
   }
 };
 
+// 检查表单是否有任何未保存的修改
+const hasAnyFieldChanged = (taskId: string) => {
+  const fieldsToCheck = [
+    'Title', 'Series', 'Number', 'LanguageISO', 'Writer', 'Penciller', 
+    'Tags', 'Genre', 'Translator', 'AgeRating', 'Manga', 'AlternateSeries', 
+    'AlternateNumber', 'SeriesGroup', 'Summary'
+  ];
+  return fieldsToCheck.some(field => isFieldDifferent(taskId, field));
+};
+
 // 检查当前表单值与数据库原始值是否有差异
 const isFieldDifferent = (taskId: string, fieldName: string) => {
   const task = tasks.value.find(t => t.id === taskId);
@@ -1965,11 +1980,27 @@ h1 {
   animation: slideDown 0.3s ease-out;
 }
 
+.edit-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
 .edit-panel-title {
-  margin: 0 0 14px 0;
+  margin: 0;
   font-size: 1em;
   font-weight: 600;
   color: #333;
+}
+
+.edit-panel-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.edit-panel-actions .path-button {
+  margin-left: 0;
 }
 
 .edit-form {
@@ -2029,6 +2060,7 @@ h1 {
 }
 
 .save-button {
+  margin-left: auto;
   padding: 8px 16px;
   border: none;
   border-radius: 5px;
