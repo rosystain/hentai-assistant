@@ -319,7 +319,7 @@
                   class="read-button"
                   title="使用 Metadata 重新构建 ComicInfo"
                 >
-                  从元数据生成
+                  读取元数据
                 </button>
                 <button
                   @click="readFromCbz(task.id)"
@@ -1415,7 +1415,7 @@ const readFromCbz = async (taskId: string) => {
   readingCbz.value[taskId] = true;
   try {
     const response = await axios.post(`${API_BASE_URL}/tasks/${taskId}/read-cbz`);
-    showNotification('成功从物理文件读取并更新元数据', 'success');
+    showNotification('成功读取并更新数据库', 'success');
 
     if (response.data.comicinfo) {
       const cbzMeta = response.data.comicinfo;
