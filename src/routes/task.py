@@ -617,6 +617,103 @@ def get_tasks():
             global_logger.error(f"Error getting tasks: {e}")
         return json_response({'error': f'Failed to get tasks: {str(e)}'}), 500
 
+@bp.route('/api/tasks/<task_id>/refresh-gmetadata', methods=['POST'])
+def refresh_task_gmetadata(task_id):
+    """从网络重新获取最新的 gmetadata.json"""
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        from database import task_db
+        task_info = task_db.get_task(task_id)
+        if not task_info:
+            return json_response({'error': 'Task not found'}), 404
+            
+        url = task_info.get('url')
+        if not url:
+            return json_response({'error': 'Task has no url'}), 400
+            
+        is_nhentai = 'nhentai.net' in url
+        is_hitomi = 'hitomi.la' in url
+        is_hdoujin = 'hdoujin.org' in url
+
+        if is_nhentai:
+            from providers import nhentai
+            gallery_tool = nhentai.NHentaiTools(cookie=current_app.config.get('NHENTAI_COOKIE'), logger=global_logger)
+        elif is_hitomi:
+            from providers import hitomi
+            gallery_tool = hitomi.HitomiTools(logger=global_logger)
+        elif is_hdoujin:
+            from providers import hdoujin
+            gallery_tool = hdoujin.HDoujinTools(
+                session_token=current_app.config.get('HDOUJIN_SESSION_TOKEN'),
+                refresh_token=current_app.config.get('HDOUJIN_REFRESH_TOKEN'),
+                clearance_token=current_app.config.get('HDOUJIN_CLEARANCE_TOKEN'),
+                user_agent=current_app.config.get('HDOUJIN_USER_AGENT'),
+                logger=global_logger
+            )
+        else:
+            gallery_tool = current_app.config.get('EH_TOOLS')
+            if not gallery_tool:
+                 return json_response({'error': 'EH_TOOLS not initialized'}), 500
+
+        gmetadata = gallery_tool.get_gmetadata(url)
+        if not gmetadata:
+             return json_response({'error': 'Failed to get gmetadata from network'}), 500
+             
+        task_db.update_task(task_id, metadata=gmetadata)
+        
+        updated_task = task_db.get_task(task_id)
+        return json_response({'message': 'gmetadata refreshed successfully', 'task': enrich_task_data(updated_task, current_app)})
+        
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"Error refreshing gmetadata for task {task_id}: {e}")
+        return json_response({'error': f'Failed to refresh gmetadata: {str(e)}'}), 500
+
+@bp.route('/api/tasks/<task_id>/generate-comicinfo', methods=['GET'])
+def generate_comicinfo_from_metadata(task_id):
+    """从数据库的原始 metadata（gmetadata）通过格式化和模板渲染生成 comicinfo"""
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        from database import task_db
+        from main import prepare_metadata_and_path
+        from metadata_extractor import MetadataExtractor
+        from providers.ehtranslator import EhTagTranslator
+
+        task_info = task_db.get_task(task_id)
+        if not task_info:
+            return json_response({'error': 'Task not found'}), 404
+
+        gmetadata = task_info.get('metadata')
+        if not gmetadata:
+            return json_response({'error': 'No original metadata available for this task'}), 400
+
+        url = task_info.get('url', '')
+        filename = task_info.get('filename', '')
+
+        # 1. 经过 metadata_extractor 格式化一遍
+        eh_translator = EhTagTranslator(enable_translation=current_app.config.get('TAGS_TRANSLATION', True))
+        extractor = MetadataExtractor(current_app.config, eh_translator)
+        metadata = extractor.parse_gmetadata(gmetadata, logger=global_logger)
+        
+        # 2. 补充 Web 字段
+        metadata['Web'] = url.split('#')[0].split('?')[0]
+
+        # 3. 根据 prepare_metadata_and_path 中的自定义模板功能渲染成最终的 comicinfo
+        comicinfo_metadata, _ = prepare_metadata_and_path(metadata, filename, current_app, global_logger)
+
+        if not comicinfo_metadata:
+            comicinfo_metadata = {}
+
+        return json_response({
+            'message': 'Successfully generated comicinfo from original metadata',
+            'comicinfo': comicinfo_metadata
+        })
+
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"Error generating comicinfo for task {task_id}: {e}")
+        return json_response({'error': f'Failed to generate comicinfo: {str(e)}'}), 500
+
 @bp.route('/api/tasks/<task_id>/metadata', methods=['PATCH'])
 def update_task_metadata(task_id):
     """更新任务的元数据（保存编辑结果到 comicinfo 和 pending_changes）"""
@@ -980,5 +1077,12 @@ def read_cbz_metadata(task_id):
     except Exception as e:
         return json_response({'error': f'读取文件失败: {str(e)}'}), 500
 
-    # 不更新数据库，只返回解析出的字典供前端比对
-    return json_response({'comicinfo': comicinfo_dict})
+    # 读取cbz的内容后将数据更新到comicinfo字段
+    task_db.update_task(task_id, comicinfo=comicinfo_dict)
+
+    updated_task = task_db.get_task(task_id)
+    return json_response({
+        'message': '读取成功并已更新元数据',
+        'comicinfo': comicinfo_dict,
+        'task': enrich_task_data(updated_task, current_app)
+    })

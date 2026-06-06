@@ -119,25 +119,25 @@
                   <button v-if="task.output_path" class="path-button" :title="task.output_path" @click="copyPath(task.output_path)">
                     📁 路径
                   </button>
-                  <button v-if="task.metadata" class="path-button" title="点击复制原始元数据 JSON" @click="copyRawMetadata(task.metadata)">
+                  <button v-if="task.metadata" class="path-button" title="点击复制原始元数据 JSON" @click="copyRawMetadata(task.metadata, task.id)">
                     📄 元数据
                   </button>
                 </p>
                 <div v-if="task.comicinfo && (task.comicinfo.Genre || task.comicinfo.LanguageISO || task.comicinfo.AgeRating || task.comicinfo.Translator)" class="task-capsules">
+                  <template v-if="task.comicinfo.Genre">
+                    <span v-for="(g, idx) in String(task.comicinfo.Genre).split(',')" :key="'genre-'+idx" class="capsule capsule-genre" v-show="g.trim()">
+                      {{ g.trim() }}
+                    </span>
+                  </template>
+                  <template v-if="task.comicinfo.AgeRating">
+                    <span class="capsule capsule-age">{{ task.comicinfo.AgeRating }}</span>
+                  </template>
                   <template v-if="task.comicinfo.LanguageISO">
                     <span class="capsule capsule-lang" :title="task.comicinfo.LanguageISO">{{ getNativeLanguageName(task.comicinfo.LanguageISO) }}</span>
                   </template>
                   <template v-if="task.comicinfo.Translator">
                     <span v-for="(t, idx) in String(task.comicinfo.Translator).split(',')" :key="'trans-'+idx" class="capsule capsule-trans" v-show="t.trim()">
                       {{ t.trim() }}
-                    </span>
-                  </template>
-                  <template v-if="task.comicinfo.AgeRating">
-                    <span class="capsule capsule-age">{{ task.comicinfo.AgeRating }}</span>
-                  </template>
-                  <template v-if="task.comicinfo.Genre">
-                    <span v-for="(g, idx) in String(task.comicinfo.Genre).split(',')" :key="'genre-'+idx" class="capsule capsule-genre" v-show="g.trim()">
-                      {{ g.trim() }}
                     </span>
                   </template>
                 </div>
@@ -310,6 +310,13 @@
                 </div>
               </div>
               <div class="edit-actions">
+                <button
+                  @click="generateFromMetadata(task.id)"
+                  class="read-button"
+                  title="使用原始 metadata 重新填充表单数据"
+                >
+                  从metadata生成
+                </button>
                 <button
                   @click="readFromCbz(task.id)"
                   :disabled="readingCbz[task.id]"
@@ -748,62 +755,28 @@ const showConfirmDialog = (message: string, options?: { showDeleteFileOption?: b
   });
 };
 
-const copyPath = async (path: string | null) => {
+const copyPath = (path: string | null) => {
   if (!path) return;
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(path);
-      showNotification('路径已复制到剪贴板', 'success', 2000);
-    } else {
-      showCopyModal(path);
-    }
-  } catch (err) {
-    console.warn('复制失败:', err);
-    showCopyModal(path);
-  }
+  showCopyModal(path);
 };
 
-const copyRawMetadata = async (metadata: Record<string, any> | null | undefined) => {
+const copyRawMetadata = (metadata: Record<string, any> | null | undefined, taskId: string) => {
   if (!metadata) return;
-  try {
-    const content = JSON.stringify(metadata, null, 2);
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(content);
-      showNotification('原始元数据已复制到剪贴板', 'success', 2000);
-    } else {
-      showCopyModal(content);
-    }
-  } catch (err) {
-    console.warn('复制失败:', err);
-    showCopyModal(JSON.stringify(metadata, null, 2));
-  }
+  showCopyModal(JSON.stringify(metadata, null, 2), { isMetadata: true, taskId });
 };
 
-const copyLog = async (logContent: string | null) => {
+const copyLog = (logContent: string | null) => {
   if (!logContent) {
     showNotification('没有日志内容可复制', 'warning');
     return;
   }
-
-  try {
-    // 检查是否支持 Clipboard API
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(logContent);
-      showNotification('日志已复制到剪贴板', 'success');
-      return;
-    }
-
-    // 如果不支持 Clipboard API，直接显示文本供用户手动复制
-    throw new Error('Clipboard API not supported');
-  } catch (err) {
-    // 显示模态框供用户手动复制
-    console.warn('自动复制失败，显示手动复制界面:', err);
-    showCopyModal(logContent);
-  }
+  showCopyModal(logContent);
 };
 
 // 显示复制模态框的辅助函数
-const showCopyModal = (content: string) => {
+const showCopyModal = (content: string, options?: { isMetadata?: boolean, taskId?: string }) => {
+  const isDark = document.documentElement.classList.contains('dark');
+
   const modal = document.createElement('div');
   modal.style.cssText = `
     position: fixed;
@@ -811,7 +784,7 @@ const showCopyModal = (content: string) => {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: ${isDark ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.5)'};
     display: flex;
     align-items: center;
     justify-content: center;
@@ -820,7 +793,8 @@ const showCopyModal = (content: string) => {
 
   const dialog = document.createElement('div');
   dialog.style.cssText = `
-    background: white;
+    background: ${isDark ? '#212529' : 'white'};
+    border: ${isDark ? '1px solid rgba(255, 255, 255, 0.2)' : 'none'};
     border-radius: 8px;
     padding: 24px;
     max-width: 600px;
@@ -835,13 +809,12 @@ const showCopyModal = (content: string) => {
 
   // 创建标题
   const title = document.createElement('h3');
-  title.textContent = '📋 复制日志内容';
-  title.style.cssText = 'margin: 0 0 16px 0; color: #333; font-size: 18px;';
+  title.textContent = '查看元数据';
+  title.style.cssText = `margin: 0 0 16px 0; color: ${isDark ? '#ffffff' : '#333'}; font-size: 18px;`;
 
   // 创建说明文本
   const description = document.createElement('p');
-  description.textContent = '请选择下方文本内容并手动复制 (Ctrl+C / Cmd+C)';
-  description.style.cssText = 'margin: 0 0 16px 0; color: #666; font-size: 14px;';
+  description.style.cssText = `margin: 0 0 16px 0; color: ${isDark ? '#adb5bd' : '#666'}; font-size: 14px;`;
 
   header.appendChild(title);
   header.appendChild(description);
@@ -851,14 +824,15 @@ const showCopyModal = (content: string) => {
   textarea.style.cssText = `
     width: 100%;
     height: 300px;
-    border: 2px solid #007bff;
+    border: 2px solid ${isDark ? 'rgba(13, 110, 253, 0.5)' : '#007bff'};
     border-radius: 6px;
     padding: 12px;
     font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
     font-size: 13px;
     line-height: 1.4;
     resize: vertical;
-    background: #f8f9fa;
+    background: ${isDark ? '#2b3035' : '#f8f9fa'};
+    color: ${isDark ? '#f8f9fa' : '#212529'};
     margin-bottom: 16px;
   `;
   textarea.readOnly = true;
@@ -866,17 +840,63 @@ const showCopyModal = (content: string) => {
   const buttonContainer = document.createElement('div');
   buttonContainer.style.cssText = `
     display: flex;
-    gap: 8px;
-    justify-content: flex-end;
+    justify-content: space-between;
   `;
+
+  const leftBtns = document.createElement('div');
+  leftBtns.style.cssText = `display: flex; gap: 8px;`;
+
+  const rightBtns = document.createElement('div');
+  rightBtns.style.cssText = `display: flex; gap: 8px;`;
+
+  if (options?.isMetadata && options.taskId) {
+      const refreshBtn = document.createElement('button');
+      refreshBtn.textContent = '刷新元数据';
+      refreshBtn.style.cssText = `
+        padding: 8px 16px;
+        background: ${isDark ? 'rgba(25, 135, 84, 0.8)' : '#198754'};
+        color: white;
+        border: ${isDark ? '1px solid rgba(25, 135, 84, 0.8)' : 'none'};
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+      `;
+      
+      refreshBtn.onclick = async () => {
+          refreshBtn.disabled = true;
+          refreshBtn.textContent = '获取中...';
+          const originalValue = textarea.value;
+          textarea.value = "正在从网络重新获取最新 gmetadata.json，请稍候...";
+          try {
+              const response = await axios.post(`${API_BASE_URL}/tasks/${options.taskId}/refresh-gmetadata`);
+              showNotification('成功获取最新元数据', 'success');
+              const newMetadata = response.data.task.metadata;
+              textarea.value = JSON.stringify(newMetadata, null, 2);
+              
+              // 同步更新 tasks 列表中的数据
+              const taskIndex = tasks.value.findIndex((t: any) => t.id === options.taskId);
+              if (taskIndex !== -1) {
+                  tasks.value[taskIndex].metadata = newMetadata;
+              }
+          } catch (err: any) {
+              const errMsg = err.response?.data?.error || err.message;
+              showNotification(`获取失败: ${errMsg}`, 'error');
+              textarea.value = `${originalValue}\n\n[错误] 获取失败: ${errMsg}`;
+          } finally {
+              refreshBtn.disabled = false;
+              refreshBtn.textContent = '重新获取';
+          }
+      };
+      leftBtns.appendChild(refreshBtn);
+  }
 
   const selectAllBtn = document.createElement('button');
   selectAllBtn.textContent = '全选';
   selectAllBtn.style.cssText = `
     padding: 8px 16px;
-    background: #6c757d;
-    color: white;
-    border: none;
+    background: ${isDark ? 'rgba(255, 255, 255, 0.1)' : '#6c757d'};
+    color: ${isDark ? '#ffffff' : 'white'};
+    border: ${isDark ? '1px solid rgba(255, 255, 255, 0.2)' : 'none'};
     border-radius: 4px;
     cursor: pointer;
     font-size: 14px;
@@ -890,9 +910,9 @@ const showCopyModal = (content: string) => {
   closeBtn.textContent = '关闭';
   closeBtn.style.cssText = `
     padding: 8px 16px;
-    background: #007bff;
+    background: ${isDark ? 'rgba(13, 110, 253, 0.8)' : '#007bff'};
     color: white;
-    border: none;
+    border: ${isDark ? '1px solid rgba(13, 110, 253, 0.8)' : 'none'};
     border-radius: 4px;
     cursor: pointer;
     font-size: 14px;
@@ -915,8 +935,11 @@ const showCopyModal = (content: string) => {
   };
   document.addEventListener('keydown', handleKeydown);
 
-  buttonContainer.appendChild(selectAllBtn);
-  buttonContainer.appendChild(closeBtn);
+  rightBtns.appendChild(selectAllBtn);
+  rightBtns.appendChild(closeBtn);
+  
+  buttonContainer.appendChild(leftBtns);
+  buttonContainer.appendChild(rightBtns);
   dialog.appendChild(header);
   dialog.appendChild(textarea);
   dialog.appendChild(buttonContainer);
@@ -1347,12 +1370,47 @@ const toggleEditPanel = (task: Task) => {
   editingTasks.value[taskId] = true;
 };
 
+// 从 metadata 生成表单数据
+const generateFromMetadata = async (taskId: string) => {
+  savingMetadata.value[taskId] = true; // 复用 savingMetadata 来显示加载状态，或者你可以新增一个 loading 状态
+  try {
+    const response = await axios.get(`${API_BASE_URL}/tasks/${taskId}/generate-comicinfo`);
+    if (response.data.comicinfo) {
+      const cbzMeta = response.data.comicinfo;
+      
+      editForms.value[taskId] = {
+        Title: cbzMeta.Title || '',
+        Series: cbzMeta.Series || '',
+        Number: cbzMeta.Number || '',
+        Writer: cbzMeta.Writer || '',
+        Penciller: cbzMeta.Penciller || '',
+        Tags: cbzMeta.Tags || '',
+        LanguageISO: cbzMeta.LanguageISO || '',
+        Genre: cbzMeta.Genre || '',
+        Translator: cbzMeta.Translator || '',
+        AgeRating: cbzMeta.AgeRating || '',
+        Manga: cbzMeta.Manga || '',
+        AlternateSeries: cbzMeta.AlternateSeries || '',
+        AlternateNumber: cbzMeta.AlternateNumber || '',
+        SeriesGroup: cbzMeta.SeriesGroup || '',
+        Summary: cbzMeta.Summary || '',
+      };
+      showNotification('已从原始 metadata 重新生成并填充数据，请检查红字差异', 'success');
+    }
+  } catch (err: any) {
+    console.error(`从 metadata 生成失败:`, err);
+    showNotification(`生成失败: ${err.response?.data?.error || err.message}`, 'error');
+  } finally {
+    savingMetadata.value[taskId] = false;
+  }
+};
+
 // 从物理文件读取元数据
 const readFromCbz = async (taskId: string) => {
   readingCbz.value[taskId] = true;
   try {
     const response = await axios.post(`${API_BASE_URL}/tasks/${taskId}/read-cbz`);
-    showNotification('成功读取物理文件中的元数据，请检查差异并保存', 'success');
+    showNotification('成功从物理文件读取并更新元数据', 'success');
 
     if (response.data.comicinfo) {
       const cbzMeta = response.data.comicinfo;
@@ -1374,6 +1432,14 @@ const readFromCbz = async (taskId: string) => {
         SeriesGroup: cbzMeta.SeriesGroup || '',
         Summary: cbzMeta.Summary || '',
       };
+
+      // 更新本地任务数据，消除标红差异
+      if (response.data.task) {
+        const index = tasks.value.findIndex(t => t.id === taskId);
+        if (index !== -1) {
+          tasks.value[index] = { ...tasks.value[index], ...response.data.task };
+        }
+      }
     }
   } catch (err: any) {
     console.error(`读取文件失败:`, err);
@@ -1768,24 +1834,9 @@ h1 {
   line-height: 1.2;
 }
 
-.capsule-lang {
-  background: rgba(13, 110, 253, 0.1);
-  color: #0d6efd;
-  border: 1px solid rgba(13, 110, 253, 0.2);
-}
-
-.capsule-age {
-  background: rgba(220, 53, 69, 0.1);
-  color: #dc3545;
-  border: 1px solid rgba(220, 53, 69, 0.2);
-}
-
-.capsule-trans {
-  background: rgba(111, 66, 193, 0.1);
-  color: #6f42c1;
-  border: 1px solid rgba(111, 66, 193, 0.2);
-}
-
+.capsule-lang,
+.capsule-age,
+.capsule-trans,
 .capsule-genre {
   background: rgba(108, 117, 125, 0.1);
   color: #6c757d;
@@ -2722,24 +2773,9 @@ h1 {
   color: #e0a800;
 }
 
-.dark .capsule-lang {
-  background: rgba(13, 110, 253, 0.2);
-  color: #6ea8fe;
-  border-color: rgba(13, 110, 253, 0.3);
-}
-
-.dark .capsule-age {
-  background: rgba(220, 53, 69, 0.2);
-  color: #ea868f;
-  border-color: rgba(220, 53, 69, 0.3);
-}
-
-.dark .capsule-trans {
-  background: rgba(111, 66, 193, 0.2);
-  color: #b193f4;
-  border-color: rgba(111, 66, 193, 0.3);
-}
-
+.dark .capsule-lang,
+.dark .capsule-age,
+.dark .capsule-trans,
 .dark .capsule-genre {
   background: rgba(108, 117, 125, 0.2);
   color: #adb5bd;

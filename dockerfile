@@ -5,7 +5,7 @@
 # 阶段1: 构建 Vue.js 前端
 # 固定为 amd64 平台，前端构建产物是纯静态文件，与 CPU 架构无关
 # 避免 QEMU 模拟 ARM 时 npm ci 触发 SIGILL (exit code 132)
-FROM --platform=linux/amd64 node:20-alpine AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
