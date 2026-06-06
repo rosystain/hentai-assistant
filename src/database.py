@@ -399,7 +399,7 @@ class TaskDatabase:
                 print(f"Database error getting task by normalized URL: {e}")
                 return None
 
-    def get_tasks(self, status_filter: Optional[str] = None, page: int = 1,
+    def get_tasks(self, status_filter: Optional[str] = None, search_query: Optional[str] = None, page: int = 1,
                   page_size: int = 20, order_by: str = "created_at DESC") -> Tuple[List[Dict], int]:
         """获取任务列表，支持分页和状态过滤"""
         with self.lock:
@@ -407,13 +407,22 @@ class TaskDatabase:
                 with self._get_conn() as conn:
                     conn.row_factory = sqlite3.Row
 
-                    where_clause = ""
+                    where_clauses = []
                     params = []
 
                     if status_filter:
                         status_cn = self.STATUS_MAP.get(status_filter, status_filter)
-                        where_clause = "WHERE status = ?"
+                        where_clauses.append("status = ?")
                         params.append(status_cn)
+                        
+                    if search_query:
+                        where_clauses.append("(id LIKE ? OR filename LIKE ? OR url LIKE ?)")
+                        search_term = f"%{search_query}%"
+                        params.extend([search_term, search_term, search_term])
+                        
+                    where_clause = ""
+                    if where_clauses:
+                        where_clause = "WHERE " + " AND ".join(where_clauses)
 
                     # 获取总数
                     count_query = f"SELECT COUNT(*) FROM tasks {where_clause}"

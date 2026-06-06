@@ -514,6 +514,7 @@ def get_tasks():
             return json_response({'error': 'Server not properly initialized'}), 500
 
         status_filter = request.args.get('status')
+        search_query = request.args.get('search', '').strip()
         
         # 安全的参数转换，添加验证
         try:
@@ -533,7 +534,7 @@ def get_tasks():
             page_size = 20
 
         # 从数据库获取任务列表
-        db_tasks, total = task_db.get_tasks(status_filter, page, page_size)
+        db_tasks, total = task_db.get_tasks(status_filter, search_query if search_query else None, page, page_size)
 
         # 合并内存中的活跃任务信息
         with tasks_lock:
@@ -570,16 +571,30 @@ def get_tasks():
         db_tasks.sort(key=lambda x: x.get('id', ''), reverse=True)
 
         # 获取各个状态的任务数量统计
+        # 如果存在搜索条件，则状态统计也应该基于搜索条件过滤
         try:
             with sqlite3.connect('./data/tasks.db') as conn:
                 conn.row_factory = sqlite3.Row
-                cursor = conn.execute('''
+                
+                where_clauses = []
+                params = []
+                if search_query:
+                    where_clauses.append("(id LIKE ? OR filename LIKE ? OR url LIKE ?)")
+                    search_term = f"%{search_query}%"
+                    params.extend([search_term, search_term, search_term])
+                
+                where_clause = ""
+                if where_clauses:
+                    where_clause = "WHERE " + " AND ".join(where_clauses)
+
+                cursor = conn.execute(f'''
                     SELECT
                         status,
                         COUNT(*) as count
                     FROM tasks
+                    {where_clause}
                     GROUP BY status
-                ''')
+                ''', params)
                 status_counts = {row['status']: row['count'] for row in cursor.fetchall()}
 
                 # 获取各个状态的总数

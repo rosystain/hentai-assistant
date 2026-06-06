@@ -445,6 +445,7 @@ const deletingTasks = ref<{ [key: string]: boolean }>({});
 const currentFilter = ref<string>('all'); // 当前选中的过滤器
 const clearing = ref(false); // 清除任务状态
 const searchQuery = ref<string>(''); // 搜索查询
+let searchTimeout: number | null = null;
 const openMenuId = ref<string | null>(null); // 控制哪个任务的更多菜单打开
 let refreshInterval: number | undefined;
 let refreshTimeout: number | undefined;
@@ -495,35 +496,9 @@ const statusFilters = [
   { key: 'failed', label: '失败' }
 ];
 
-// 分页后的任务列表（从后端获取并应用搜索过滤）
+// 分页后的任务列表（不再前端过滤，直接返回后端分页后的结果）
 const paginatedTasks = computed(() => {
-  let filteredTasks = tasks.value;
-
-  // 应用搜索过滤
-  if (searchQuery.value.trim()) {
-    const query = searchQuery.value.toLowerCase().trim();
-    filteredTasks = filteredTasks.filter(task => {
-      // 搜索任务ID
-      if (task.id.toLowerCase().includes(query)) {
-        return true;
-      }
-      // 搜索文件名
-      if (task.filename && task.filename.toLowerCase().includes(query)) {
-        return true;
-      }
-      // 搜索URL
-      if (task.url && task.url.toLowerCase().includes(query)) {
-        return true;
-      }
-      // 搜索状态文本
-      if (statusText(task.status).toLowerCase().includes(query)) {
-        return true;
-      }
-      return false;
-    });
-  }
-
-  return filteredTasks;
+  return tasks.value;
 });
 
 // 优化任务列表更新，避免不必要的重新渲染
@@ -547,6 +522,10 @@ const fetchTasks = async (isInitialLoad = false) => {
 
     if (currentFilter.value !== 'all') {
       params.append('status', currentFilter.value);
+    }
+    
+    if (searchQuery.value.trim()) {
+      params.append('search', searchQuery.value.trim());
     }
 
     const response = await axios.get(`${API_BASE_URL}/tasks?${params}`);
@@ -1150,15 +1129,45 @@ const setStatusFilter = (filter: string) => {
 
 // 处理搜索输入
 const handleSearch = () => {
-  // 搜索时重置到第一页
-  pagination.value.page = 1;
-  // 由于搜索是客户端过滤，不需要重新获取数据
+  if (searchTimeout) {
+    clearTimeout(searchTimeout);
+  }
+  searchTimeout = window.setTimeout(() => {
+    pagination.value.page = 1;
+    fetchTasks(true);
+    updateUrlQuery();
+  }, 500);
 };
 
 // 清除搜索
 const clearSearch = () => {
   searchQuery.value = '';
   pagination.value.page = 1;
+  fetchTasks(true);
+  updateUrlQuery();
+};
+
+const updateUrlQuery = () => {
+  const url = new URL(window.location.href);
+  if (searchQuery.value.trim()) {
+    url.searchParams.set('search', searchQuery.value.trim());
+  } else {
+    url.searchParams.delete('search');
+  }
+  window.history.replaceState({}, '', url);
+};
+
+const checkUrlQuery = () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const searchParam = urlParams.get('search');
+  // 也支持传入 url 参数进行反查，直接作为 search 词
+  const urlParam = urlParams.get('url');
+  
+  if (searchParam) {
+    searchQuery.value = searchParam;
+  } else if (urlParam) {
+    searchQuery.value = urlParam;
+  }
 };
 
 // 分页相关方法
@@ -1598,6 +1607,7 @@ const getNativeLanguageName = (iso: string): string => {
 };
 
 onMounted(() => {
+  checkUrlQuery();
   fetchTasks(true); // 初始加载
   startSmartRefresh(); // 开始智能刷新
   document.addEventListener('click', () => {
