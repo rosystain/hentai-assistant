@@ -10,6 +10,7 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # 忽略 data 和 test 文件夹
+.ai
 data/
 test/
 test.*
