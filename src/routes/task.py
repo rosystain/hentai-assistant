@@ -24,6 +24,12 @@ def enrich_task_data(task_dict, app):
         task_data['target_path'] = suggested
     else:
         task_data['has_path_difference'] = False
+        
+    if task_data.get('komga_id'):
+        komga_server = app.config.get('KOMGA_SERVER', '').rstrip('/')
+        if komga_server:
+            task_data['komga_url'] = f"{komga_server}/book/{task_data['komga_id']}"
+            
     return task_data
 
 
@@ -32,19 +38,42 @@ def extract_comicinfo_from_cbz(cbz_path):
     import zipfile
     import xml.etree.ElementTree as ET
     if not cbz_path or not os.path.exists(cbz_path):
+        from flask import current_app
+        logger = current_app.config.get('GLOBAL_LOGGER') if current_app else None
+        if logger:
+            logger.warning(f"extract_comicinfo_from_cbz failed: File not found or empty path: {cbz_path}")
         return None
     comicinfo_dict = {}
     try:
         with zipfile.ZipFile(cbz_path, 'r') as zf:
-            if 'ComicInfo.xml' in zf.namelist():
-                xml_content = zf.read('ComicInfo.xml')
+            comicinfo_name = next((name for name in zf.namelist() if name.lower() == 'comicinfo.xml'), None)
+            if comicinfo_name:
+                xml_content = zf.read(comicinfo_name)
                 root = ET.fromstring(xml_content)
+                
+                # 定义标准字段映射，确保无论 XML 中大小写如何都能映射到标准名称
+                key_map = {
+                    'agerating': 'AgeRating', 'languageiso': 'LanguageISO',
+                    'alternateseries': 'AlternateSeries', 'alternatenumber': 'AlternateNumber',
+                    'storyarc': 'StoryArc', 'storyarcnumber': 'StoryArcNumber',
+                    'seriesgroup': 'SeriesGroup', 'coverartist': 'CoverArtist',
+                    'gtin': 'GTIN', 'number': 'Number', 'series': 'Series',
+                    'title': 'Title', 'writer': 'Writer', 'penciller': 'Penciller',
+                    'translator': 'Translator', 'tags': 'Tags', 'web': 'Web',
+                    'manga': 'Manga', 'genre': 'Genre', 'summary': 'Summary'
+                }
+                
                 for child in root:
                     tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
                     if child.text:
-                        comicinfo_dict[tag] = child.text
+                        standard_tag = key_map.get(tag.lower(), tag)
+                        comicinfo_dict[standard_tag] = child.text
                 return comicinfo_dict
-    except Exception:
+    except Exception as e:
+        from flask import current_app
+        logger = current_app.config.get('GLOBAL_LOGGER') if current_app else None
+        if logger:
+            logger.error(f"extract_comicinfo_from_cbz error processing {cbz_path}: {e}")
         return None
     return None
 
@@ -913,6 +942,8 @@ def update_task_metadata(task_id):
         task_info = task_db.get_task(task_id)
         if not task_info:
             return json_response({'error': 'Task not found'}), 404
+            
+        # 移除之前的 SourceURL 逻辑，使用更符合 ComicInfo 规范的 Web 字段
 
         # 定义所有支持的 ComicInfo 标准字段
         key_map = {
@@ -990,6 +1021,30 @@ def update_task_metadata(task_id):
 
         if global_logger:
             global_logger.info(f"Task {task_id} metadata saved and repack executed (status: {repack_status})")
+
+        # 处理 Web 字段：如果 Web 填入了一个我们支持的源站 URL（如 EH, NH, HDoujin），更新任务 url 并自动触发元数据抓取
+        web_url = data.get('Web')
+        if web_url:
+            web_url_str = str(web_url).strip()
+            # ComicInfo 规范允许 Web 字段包含多个由空格分隔的 URL
+            if web_url_str:
+                urls = web_url_str.split()
+                matched_url = None
+                for u in urls:
+                    _, site_type = task_db.normalize_url(u)
+                    if site_type != 'other':
+                        matched_url = u
+                        break
+                
+                if matched_url and matched_url != task_info.get('url'):
+                    # 更新任务 URL 为实际用于刮削的有效链接
+                    task_db.update_task(task_id, url=matched_url)
+                    # 触发异步抓取流程
+                    import main
+                    executor = main.executor
+                    if executor:
+                        app = current_app._get_current_object()
+                        executor.submit(fetch_and_update_gmetadata_async, app, task_id, matched_url)
 
         # 返回更新且增强后的任务数据
         updated_task = task_db.get_task(task_id)
@@ -1247,6 +1302,13 @@ def read_cbz_metadata(task_id):
     if comicinfo_dict is None:
         return json_response({'error': '读取文件失败或压缩包中未找到 ComicInfo.xml'}), 404
 
+    # 保护可能由 Komga 等渠道注入的后备补充数据
+    # 如果压缩包内确实缺少这些字段，但数据库里已经补充过了，就保留数据库里的值，防止被洗掉
+    existing_comicinfo = task_info.get('comicinfo') or {}
+    for k in ['Series', 'Title', 'Number', 'Web']:
+        if not comicinfo_dict.get(k) and existing_comicinfo.get(k):
+            comicinfo_dict[k] = existing_comicinfo.get(k)
+
     # 读取cbz的内容后将数据更新到comicinfo字段
     task_db.update_task(task_id, comicinfo=comicinfo_dict)
 
@@ -1297,21 +1359,27 @@ def sync_komga_task():
 
             matched_task = None
             source_url = None
+            
+            # 提取所有有效链接
+            all_urls = []
 
             for link in links:
                 l_url = link.get('url')
                 if l_url:
+                    if l_url not in all_urls:
+                        all_urls.append(l_url)
                     if not source_url:
                         source_url = l_url
                     normalized_url, _ = task_db.normalize_url(l_url)
                     task = task_db.get_task_by_normalized_url(normalized_url)
-                    if task:
+                    if task and not matched_task:
                         matched_task = task
                         source_url = l_url
-                        break
             
-            if not source_url:
-                source_url = provided_url
+            # 移除退而求其次使用 provided_url 的逻辑，因为 provided_url 可能是系列链接
+            # source_url 将保持 None 如果 metadata.links 中没有外部链接
+            
+            komga_id = book_data.get('id')
             
             if matched_task:
                 task_id = matched_task['id']
@@ -1328,12 +1396,41 @@ def sync_komga_task():
                 if matched_task.get('last_error'):
                     updates['last_error'] = None
                     
-                # 注入 Series
+                if komga_id and matched_task.get('komga_id') != komga_id:
+                    updates['komga_id'] = komga_id
+                    
+                # 注入 Series、Title、Number 和 Web
+                current_comicinfo = matched_task.get('comicinfo') or {}
+                comicinfo_modified = False
+                
+                # 如果已存在的任务没有 comicinfo，则尝试直接从物理文件中提取兜底
+                if not current_comicinfo:
+                    extracted = extract_comicinfo_from_cbz(komga_path)
+                    if extracted:
+                        current_comicinfo = extracted
+                        comicinfo_modified = True
+                
                 if not is_oneshot and komga_series_title:
-                    current_comicinfo = matched_task.get('comicinfo') or {}
-                    if current_comicinfo.get('Series') != komga_series_title:
+                    if not current_comicinfo.get('Series'):
                         current_comicinfo['Series'] = komga_series_title
-                        updates['comicinfo'] = current_comicinfo
+                        comicinfo_modified = True
+                        
+                if not current_comicinfo.get('Title') and book_name:
+                    current_comicinfo['Title'] = book_name
+                    comicinfo_modified = True
+                    
+                komga_number = book_data.get('number')
+                if not current_comicinfo.get('Number') and komga_number:
+                    current_comicinfo['Number'] = str(komga_number)
+                    comicinfo_modified = True
+                        
+                if all_urls:
+                    if not current_comicinfo.get('Web'):
+                        current_comicinfo['Web'] = " ".join(all_urls)
+                        comicinfo_modified = True
+                        
+                if comicinfo_modified:
+                    updates['comicinfo'] = current_comicinfo
                         
                 if updates:
                     task_db.update_task(task_id, **updates)
@@ -1360,14 +1457,32 @@ def sync_komga_task():
                     output_path=komga_path, 
                     target_path=komga_path,
                     filename=book_name,
-                    url=source_url
+                    url=source_url,
+                    komga_id=komga_id
                 )
                 
                 comicinfo_dict = extract_comicinfo_from_cbz(komga_path) or {}
                 
-                # 注入 Series
+                # 注入 Series、Title、Number 和 Web
+                comicinfo_modified = False
                 if not is_oneshot and komga_series_title:
-                    comicinfo_dict['Series'] = komga_series_title
+                    if not comicinfo_dict.get('Series'):
+                        comicinfo_dict['Series'] = komga_series_title
+                        comicinfo_modified = True
+                    
+                if not comicinfo_dict.get('Title') and book_name:
+                    comicinfo_dict['Title'] = book_name
+                    comicinfo_modified = True
+                    
+                komga_number = book_data.get('number')
+                if not comicinfo_dict.get('Number') and komga_number:
+                    comicinfo_dict['Number'] = str(komga_number)
+                    comicinfo_modified = True
+                    
+                if all_urls:
+                    if not comicinfo_dict.get('Web'):
+                        comicinfo_dict['Web'] = " ".join(all_urls)
+                        comicinfo_modified = True
                     
                 if comicinfo_dict:
                     task_db.update_task(task_id, comicinfo=comicinfo_dict)

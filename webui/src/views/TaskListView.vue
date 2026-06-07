@@ -175,6 +175,13 @@
                   >
                     跳转画廊
                   </button>
+                  <button
+                    v-if="task.komga_url"
+                    @click="openGallery(task.komga_url)"
+                    class="komga-button"
+                  >
+                    Komga
+                  </button>
                   <button @click="toggleLog(task.id)" class="log-button">
                     {{ expandedLogs[task.id] ? '隐藏日志' : '查看日志' }}
                   </button>
@@ -251,7 +258,7 @@
                   <button v-if="task.output_path" class="path-button" :title="task.output_path" @click="copyPath(task.output_path)">
                     📁 路径
                   </button>
-                  <button v-if="task.metadata" class="path-button" title="点击复制原始元数据 JSON" @click="copyRawMetadata(task.metadata, task.id)">
+                  <button class="path-button" title="点击查看或复制原始元数据 JSON" @click="copyRawMetadata(task.metadata, task.id)">
                     📄 元数据
                   </button>
                 </div>
@@ -285,9 +292,15 @@
                     <input type="text" v-model="editForms[task.id].Penciller" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Penciller') }" />
                   </div>
                 </div>
-                <div class="edit-field">
-                  <label>Tags</label>
-                  <textarea v-model="editForms[task.id].Tags" rows="2" placeholder="逗号分隔" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Tags') }"></textarea>
+                <div class="edit-field-row">
+                  <div class="edit-field">
+                    <label>Web</label>
+                    <input type="text" v-model="editForms[task.id].Web" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Web') }" placeholder="画廊来源链接" />
+                  </div>
+                  <div class="edit-field">
+                    <label>Tags</label>
+                    <textarea v-model="editForms[task.id].Tags" rows="2" placeholder="逗号分隔" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Tags') }"></textarea>
+                  </div>
                 </div>
                 <div class="edit-field-row">
                   <div class="edit-field">
@@ -548,6 +561,7 @@ interface Task {
   output_path?: string | null;
   target_path?: string | null;
   cover_url?: string | null;
+  komga_url?: string | null;
   pending_changes?: Record<string, any> | null;
   repack_status?: string | null;
   move_status?: string | null;
@@ -1037,8 +1051,8 @@ const copyPath = (path: string | null) => {
 };
 
 const copyRawMetadata = (metadata: Record<string, any> | null | undefined, taskId: string) => {
-  if (!metadata) return;
-  showCopyModal(JSON.stringify(metadata, null, 2), { isMetadata: true, taskId });
+  const content = metadata ? JSON.stringify(metadata, null, 2) : "{}";
+  showCopyModal(content, { isMetadata: true, taskId });
 };
 
 const copyLog = (logContent: string | null) => {
@@ -1633,6 +1647,7 @@ const toggleEditPanel = (task: Task) => {
       AlternateNumber: metaFinal.AlternateNumber || '',
       SeriesGroup: metaFinal.SeriesGroup || '',
       Summary: metaFinal.Summary || '',
+      Web: metaFinal.Web || '',
     };
   } else if (metaRaw) {
     // 回退：从 gmetadata (metadata) 提取基本信息
@@ -1655,12 +1670,13 @@ const toggleEditPanel = (task: Task) => {
       AlternateNumber: extractedNumber,
       SeriesGroup: '',
       Summary: '',
+      Web: '',
     };
   } else {
     editForms.value[taskId] = {
       Title: '', Series: '', Number: '', Writer: '', Penciller: '',
       Tags: '', LanguageISO: '', Genre: '', Translator: '', AgeRating: '', Manga: '',
-      AlternateSeries: '', AlternateNumber: '', SeriesGroup: '', Summary: '',
+      AlternateSeries: '', AlternateNumber: '', SeriesGroup: '', Summary: '', Web: ''
     };
   }
   editingTasks.value[taskId] = true;
@@ -1690,6 +1706,7 @@ const generateFromMetadata = async (taskId: string) => {
         AlternateNumber: cbzMeta.AlternateNumber || '',
         SeriesGroup: cbzMeta.SeriesGroup || '',
         Summary: cbzMeta.Summary || '',
+        Web: cbzMeta.Web || '',
       };
       showNotification('已从原始 metadata 重新生成并填充数据，请检查红字差异', 'success');
     }
@@ -1727,6 +1744,7 @@ const readFromCbz = async (taskId: string) => {
         AlternateNumber: cbzMeta.AlternateNumber || '',
         SeriesGroup: cbzMeta.SeriesGroup || '',
         Summary: cbzMeta.Summary || '',
+        Web: cbzMeta.Web || '',
       };
 
       // 更新本地任务数据，消除标红差异
@@ -1750,7 +1768,7 @@ const hasAnyFieldChanged = (taskId: string) => {
   const fieldsToCheck = [
     'Title', 'Series', 'Number', 'LanguageISO', 'Writer', 'Penciller', 
     'Tags', 'Genre', 'Translator', 'AgeRating', 'Manga', 'AlternateSeries', 
-    'AlternateNumber', 'SeriesGroup', 'Summary'
+    'AlternateNumber', 'SeriesGroup', 'Summary', 'Web'
   ];
   return fieldsToCheck.some(field => isFieldDifferent(taskId, field));
 };
@@ -2295,6 +2313,8 @@ h1 {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
+
+
 .edit-field input:focus,
 .edit-field textarea:focus,
 .edit-field select:focus {
@@ -2424,7 +2444,7 @@ h1 {
   flex-wrap: wrap;
 }
 
-.log-button, .stop-button, .retry-button, .gallery-button, .refresh-button, .edit-button {
+.log-button, .stop-button, .retry-button, .gallery-button, .komga-button, .refresh-button, .edit-button {
   padding: 8px 15px;
   border: none;
   border-radius: 5px;
@@ -2442,13 +2462,13 @@ h1 {
   background-color: #0056b3;
 }
 
-.gallery-button {
+.gallery-button, .komga-button {
   background-color: #6f42c1;
   color: white;
 }
 
-.gallery-button:hover {
-  background-color: #5a359a;
+.gallery-button:hover, .komga-button:hover {
+  background-color: #59359a;
 }
 
 .retry-button {

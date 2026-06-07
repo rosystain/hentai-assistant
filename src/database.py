@@ -57,6 +57,7 @@ class TaskDatabase:
                     move_status TEXT,
                     last_error TEXT,
                     cover_url TEXT,
+                    komga_id TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
@@ -74,7 +75,7 @@ class TaskDatabase:
             cursor = conn.execute("PRAGMA table_info(tasks)")
             columns = [row[1] for row in cursor.fetchall()]
 
-            # 字段重命名迁移：将 metadata_raw 改为 metadata，将 metadata_final 改为 comicinfo
+            # 字段重命名迁移：将 metadata_raw 改为 metadata，将 metadata_final 改为 comicinfo，komga_url 改为 komga_id
             try:
                 if 'metadata_raw' in columns and 'metadata' not in columns:
                     conn.execute("ALTER TABLE tasks RENAME COLUMN metadata_raw TO metadata")
@@ -84,6 +85,10 @@ class TaskDatabase:
                     conn.execute("ALTER TABLE tasks RENAME COLUMN metadata_final TO comicinfo")
                     columns.remove('metadata_final')
                     columns.append('comicinfo')
+                if 'komga_url' in columns and 'komga_id' not in columns:
+                    conn.execute("ALTER TABLE tasks RENAME COLUMN komga_url TO komga_id")
+                    columns.remove('komga_url')
+                    columns.append('komga_id')
             except sqlite3.Error as e:
                 import logging
                 logging.error(f"Error renaming metadata columns: {e}")
@@ -102,7 +107,8 @@ class TaskDatabase:
                 "repack_status",
                 "move_status",
                 "last_error",
-                "cover_url"
+                "cover_url",
+                "komga_id"
             ):
                 if col not in columns:
                     conn.execute(f'ALTER TABLE tasks ADD COLUMN {col} TEXT')
@@ -216,7 +222,7 @@ class TaskDatabase:
                  output_path: Optional[str] = None, target_path: Optional[str] = None,
                  pending_changes: Optional[Dict] = None, repack_status: Optional[str] = None,
                  move_status: Optional[str] = None, last_error: Optional[str] = None,
-                 cover_url: Optional[str] = None) -> bool:
+                 cover_url: Optional[str] = None, komga_id: Optional[str] = None) -> bool:
         """添加新任务"""
         status = self.STATUS_MAP.get(status, status)
         # 计算 normalized_url
@@ -236,8 +242,8 @@ class TaskDatabase:
                         (id, status, filename, error, url, mode, favcat, normalized_url,
                          metadata, comicinfo, output_path, target_path,
                          pending_changes, repack_status, move_status, last_error, cover_url,
-                         created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         komga_id, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         task_id,
                         status,
@@ -256,6 +262,7 @@ class TaskDatabase:
                         move_status,
                         last_error,
                         cover_url,
+                        komga_id,
                         now,
                         now
                     ))
@@ -273,7 +280,7 @@ class TaskDatabase:
                     output_path: Optional[str] = None, target_path: Optional[str] = None,
                     pending_changes: Optional[Dict] = None, repack_status: Optional[str] = None,
                     move_status: Optional[str] = None, last_error: Optional[str] = None,
-                    cover_url: Optional[str] = None) -> bool:
+                    cover_url: Optional[str] = None, komga_id: Optional[str] = None) -> bool:
         """更新任务信息"""
         with self.lock:
             try:
@@ -341,6 +348,9 @@ class TaskDatabase:
                     if cover_url is not None:
                         updates.append("cover_url = ?")
                         params.append(cover_url)
+                    if komga_id is not None:
+                        updates.append("komga_id = ?")
+                        params.append(komga_id)
 
                     if updates:
                         updates.append("updated_at = ?")
@@ -495,8 +505,8 @@ class TaskDatabase:
                             (id, status, error, log, filename, progress, downloaded,
                              total_size, speed, url, mode, metadata, comicinfo,
                              output_path, target_path, pending_changes, repack_status,
-                             move_status, last_error, cover_url, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             move_status, last_error, cover_url, komga_id, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ''', (
                             task_id,
                             self.STATUS_MAP.get(task_info.status, task_info.status),
@@ -518,6 +528,7 @@ class TaskDatabase:
                             getattr(task_info, "move_status", None),
                             getattr(task_info, "last_error", None),
                             getattr(task_info, "cover_url", None),
+                            getattr(task_info, "komga_id", None),
                             now,
                             now
                         ))
