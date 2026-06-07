@@ -60,6 +60,14 @@
         </button>
       </div>
 
+      <!-- 排序下拉选择 -->
+      <div class="sort-controls">
+        <select v-model="sortBy" @change="handleSortChange" class="filter-select">
+          <option value="created_at">按创建时间</option>
+          <option value="updated_at">按最近更新</option>
+        </select>
+      </div>
+
       <!-- 移动端：下拉选择 -->
       <div class="status-filters-mobile">
         <select
@@ -557,6 +565,7 @@ const retryingTasks = ref<{ [key: string]: boolean }>({});
 const deletingTasks = ref<{ [key: string]: boolean }>({});
 
 const currentFilter = ref<string>('all'); // 当前选中的过滤器
+const sortBy = ref<string>('created_at'); // 当前排序方式
 const clearing = ref(false); // 清除任务状态
 const searchQuery = ref<string>(''); // 搜索查询
 let searchTimeout: number | null = null;
@@ -643,6 +652,11 @@ const showClearButton = computed(() => {
   
   return true;
 });
+
+const handleSortChange = () => {
+  pagination.value.page = 1;
+  fetchTasks(false);
+};
 
 const openBatchMoveModal = () => {
   // 默认全选
@@ -740,6 +754,10 @@ const fetchTasks = async (isInitialLoad = false) => {
 
     if (currentFilter.value !== 'all') {
       params.append('status', currentFilter.value);
+    }
+    
+    if (sortBy.value !== 'created_at') {
+      params.append('sort', sortBy.value);
     }
     
     if (searchQuery.value.trim()) {

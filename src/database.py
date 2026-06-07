@@ -416,9 +416,15 @@ class TaskDatabase:
                         params.append(status_cn)
                         
                     if search_query:
-                        where_clauses.append("(id LIKE ? OR filename LIKE ? OR url LIKE ?)")
-                        search_term = f"%{search_query}%"
-                        params.extend([search_term, search_term, search_term])
+                        import re
+                        terms = [t.strip() for t in re.split(r'[,|\n]+', search_query) if t.strip()]
+                        if terms:
+                            term_clauses = []
+                            for term in terms:
+                                term_clauses.append("(id LIKE ? OR filename LIKE ? OR url LIKE ?)")
+                                search_term = f"%{term}%"
+                                params.extend([search_term, search_term, search_term])
+                            where_clauses.append("(" + " OR ".join(term_clauses) + ")")
                         
                     where_clause = ""
                     if where_clauses:

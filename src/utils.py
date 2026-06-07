@@ -64,6 +64,10 @@ def download_cover(url: str, task_id: str, app_config: dict, logger=None) -> str
         
     save_path = os.path.join(cover_dir, f"{task_id}{ext}")
     
+    # 如果本地已存在该任务的封面，直接跳过下载，避免重复请求和覆盖
+    if os.path.exists(save_path):
+        return f"/api/covers/{task_id}{ext}"
+    
     try:
         proxies = None
         if app_config and app_config.get('PROXY_URL'):

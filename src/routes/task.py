@@ -26,6 +26,121 @@ def enrich_task_data(task_dict, app):
         task_data['has_path_difference'] = False
     return task_data
 
+
+def extract_comicinfo_from_cbz(cbz_path):
+    import os
+    import zipfile
+    import xml.etree.ElementTree as ET
+    if not cbz_path or not os.path.exists(cbz_path):
+        return None
+    comicinfo_dict = {}
+    try:
+        with zipfile.ZipFile(cbz_path, 'r') as zf:
+            if 'ComicInfo.xml' in zf.namelist():
+                xml_content = zf.read('ComicInfo.xml')
+                root = ET.fromstring(xml_content)
+                for child in root:
+                    tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                    if child.text:
+                        comicinfo_dict[tag] = child.text
+                return comicinfo_dict
+    except Exception:
+        return None
+    return None
+
+def fetch_and_update_gmetadata_async(app, task_id, url):
+    """后台任务：尝试获取 gmetadata 并更新任务"""
+    with app.app_context():
+        global_logger = app.config.get('GLOBAL_LOGGER')
+        try:
+            from database import task_db
+            is_nhentai = 'nhentai.net' in url
+            is_hitomi = 'hitomi.la' in url
+            is_hdoujin = 'hdoujin.org' in url
+
+            if is_nhentai:
+                from providers import nhentai
+                gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('NHENTAI_COOKIE'), logger=global_logger)
+            elif is_hitomi:
+                from providers import hitomi
+                gallery_tool = hitomi.HitomiTools(logger=global_logger)
+            elif is_hdoujin:
+                from providers import hdoujin
+                gallery_tool = hdoujin.HDoujinTools(
+                    session_token=app.config.get('HDOUJIN_SESSION_TOKEN'),
+                    refresh_token=app.config.get('HDOUJIN_REFRESH_TOKEN'),
+                    clearance_token=app.config.get('HDOUJIN_CLEARANCE_TOKEN'),
+                    user_agent=app.config.get('HDOUJIN_USER_AGENT'),
+                    logger=global_logger
+                )
+            else:
+                gallery_tool = app.config.get('EH_TOOLS')
+                if not gallery_tool:
+                    return
+
+            gmetadata = gallery_tool.get_gmetadata(url)
+            if gmetadata:
+                updates = {'metadata': gmetadata}
+                
+                # 下载封面
+                raw_cover_url = gmetadata.get('thumb') or gmetadata.get('thumbnail_url')
+                if raw_cover_url:
+                    from utils import download_cover
+                    cover_url = download_cover(raw_cover_url, task_id, app.config, global_logger)
+                    updates['cover_url'] = cover_url
+                
+                # 检查 comicinfo 是否为空，如果为空，则根据 gmetadata 生成并打包
+                task_info = task_db.get_task(task_id)
+                if not task_info.get('comicinfo'):
+                    try:
+                        from main import prepare_metadata_and_path
+                        from metadata_extractor import MetadataExtractor
+                        from providers.ehtranslator import EhTagTranslator
+                        
+                        eh_translator = EhTagTranslator(enable_translation=app.config.get('TAGS_TRANSLATION', True))
+                        extractor = MetadataExtractor(app.config, eh_translator)
+                        parsed_meta = extractor.parse_gmetadata(gmetadata, logger=global_logger)
+                        parsed_meta['Web'] = url.split('#')[0].split('?')[0]
+                        
+                        comicinfo_metadata, _ = prepare_metadata_and_path(parsed_meta, task_info.get('filename', ''), app, global_logger)
+                        if comicinfo_metadata:
+                            updates['comicinfo'] = comicinfo_metadata
+                            
+                            # 尝试打包进 CBZ
+                            cbz_path = task_info.get('output_path')
+                            if cbz_path:
+                                import os
+                                import cbztool
+                                if os.path.exists(cbz_path):
+                                    # 读取白名单配置
+                                    comicinfo_config = app.config.get('COMICINFO', {}) or {}
+                                    key_map = {
+                                        'agerating': 'AgeRating', 'languageiso': 'LanguageISO',
+                                        'alternateseries': 'AlternateSeries', 'alternatenumber': 'AlternateNumber',
+                                        'storyarc': 'StoryArc', 'storyarcnumber': 'StoryArcNumber',
+                                        'seriesgroup': 'SeriesGroup', 'coverartist': 'CoverArtist',
+                                        'gtin': 'GTIN', 'number': 'Number', 'series': 'Series',
+                                        'title': 'Title', 'writer': 'Writer', 'penciller': 'Penciller',
+                                        'translator': 'Translator', 'tags': 'Tags', 'web': 'Web',
+                                        'manga': 'Manga', 'genre': 'Genre'
+                                    }
+                                    allowed_keys = set()
+                                    for k in comicinfo_config.keys():
+                                        allowed_keys.add(key_map.get(k.lower(), k.capitalize()))
+                                        
+                                    filtered_metadata = {k: v for k, v in comicinfo_metadata.items() if k in allowed_keys}
+                                    cbztool.update_comicinfo_in_cbz(cbz_path, filtered_metadata, logger=global_logger)
+                    except Exception as meta_err:
+                        if global_logger:
+                            global_logger.warning(f"后台自动生成/打包 comicinfo 失败 (task_id: {task_id}): {meta_err}")
+
+                task_db.update_task(task_id, **updates)
+                if global_logger:
+                    global_logger.info(f"后台异步获取 gmetadata 并处理封面/元数据成功 (task_id: {task_id})")
+        except Exception as e:
+            if global_logger:
+                global_logger.warning(f"后台异步获取 gmetadata 失败 (task_id: {task_id}): {e}")
+
 # 创建 Blueprint 实例
 bp = Blueprint('task', __name__)
 
@@ -533,8 +648,14 @@ def get_tasks():
         except (ValueError, TypeError):
             page_size = 20
 
+        sort_by = request.args.get('sort', 'created_at')
+        if sort_by not in ['created_at', 'updated_at', 'id']:
+            sort_by = 'created_at'
+
+        order_by_sql = f"{sort_by} DESC"
+
         # 从数据库获取任务列表
-        db_tasks, total = task_db.get_tasks(status_filter, search_query if search_query else None, page, page_size)
+        db_tasks, total = task_db.get_tasks(status_filter, search_query if search_query else None, page, page_size, order_by=order_by_sql)
 
         # 合并内存中的活跃任务信息
         with tasks_lock:
@@ -567,8 +688,11 @@ def get_tasks():
                         speed=memory_task.speed
                     )
 
-        # 按任务ID降序排序（任务ID基于时间，新的ID更大）
-        db_tasks.sort(key=lambda x: x.get('id', ''), reverse=True)
+        # 兜底内存排序
+        if sort_by == 'updated_at':
+            db_tasks.sort(key=lambda x: x.get('updated_at', x.get('created_at', '')), reverse=True)
+        else:
+            db_tasks.sort(key=lambda x: x.get('id', ''), reverse=True)
 
         # 获取各个状态的任务数量统计
         # 如果存在搜索条件，则状态统计也应该基于搜索条件过滤
@@ -579,9 +703,15 @@ def get_tasks():
                 where_clauses = []
                 params = []
                 if search_query:
-                    where_clauses.append("(id LIKE ? OR filename LIKE ? OR url LIKE ?)")
-                    search_term = f"%{search_query}%"
-                    params.extend([search_term, search_term, search_term])
+                    import re
+                    terms = [t.strip() for t in re.split(r'[,|\n]+', search_query) if t.strip()]
+                    if terms:
+                        term_clauses = []
+                        for term in terms:
+                            term_clauses.append("(id LIKE ? OR filename LIKE ? OR url LIKE ?)")
+                            search_term = f"%{term}%"
+                            params.extend([search_term, search_term, search_term])
+                        where_clauses.append("(" + " OR ".join(term_clauses) + ")")
                 
                 where_clause = ""
                 if where_clauses:
@@ -705,10 +835,17 @@ def refresh_task_gmetadata(task_id):
         if not gmetadata:
              return json_response({'error': 'Failed to get gmetadata from network'}), 500
              
-        task_db.update_task(task_id, metadata=gmetadata)
+        updates = {'metadata': gmetadata}
+        raw_cover_url = gmetadata.get('thumb') or gmetadata.get('thumbnail_url')
+        if raw_cover_url:
+            from utils import download_cover
+            cover_url = download_cover(raw_cover_url, task_id, current_app.config, global_logger)
+            updates['cover_url'] = cover_url
+            
+        task_db.update_task(task_id, **updates)
         
         updated_task = task_db.get_task(task_id)
-        return json_response({'message': 'gmetadata refreshed successfully', 'task': enrich_task_data(updated_task, current_app)})
+        return json_response({'message': 'gmetadata refreshed and cover updated successfully', 'task': enrich_task_data(updated_task, current_app)})
         
     except Exception as e:
         if global_logger:
@@ -818,8 +955,10 @@ def update_task_metadata(task_id):
         repack_status = 'completed'
         last_error = None
         
-        # 性能优化：只有当确实有属于 ComicInfo 配置范围内的字段发生了变化时，才进行物理打包操作
-        if pending_changes_diff and cbz_path and os.path.exists(cbz_path):
+        # 性能优化：如果数据有差异，或者上一次打包状态是失败/待处理（比如之前文件丢失现在修复了），则强制执行打包
+        needs_repack = bool(pending_changes_diff) or task_info.get('repack_status') in ['failed', 'pending']
+
+        if needs_repack and cbz_path and os.path.exists(cbz_path):
             # 将新数据按照白名单过滤，只写入配置允许的字段到 ComicInfo.xml
             filtered_metadata = {k: v for k, v in data.items() if k in allowed_keys}
             try:
@@ -834,8 +973,8 @@ def update_task_metadata(task_id):
                 pending_changes = pending_changes_diff
                 repack_status = 'failed'
                 last_error = f'自动打包失败: {str(e)}'
-        elif pending_changes_diff and cbz_path:
-            # 有 output_path 但文件不存在，且确实有待写入 XML 的元数据更改
+        elif needs_repack and cbz_path:
+            # 有 output_path 但文件不存在，此时无法打包
             pending_changes = pending_changes_diff
             repack_status = 'failed'
             last_error = f'物理文件不存在，无法打包: {cbz_path}'
@@ -1095,9 +1234,6 @@ def move_task_file(task_id):
 def read_cbz_metadata(task_id):
     """从已完成的 CBZ 文件中重新读取并同步 ComicInfo.xml 元数据"""
     import os
-    import zipfile
-    import xml.etree.ElementTree as ET
-
     from database import task_db
     task_info = task_db.get_task(task_id)
     if not task_info:
@@ -1107,21 +1243,9 @@ def read_cbz_metadata(task_id):
     if not cbz_path or not os.path.exists(cbz_path):
         return json_response({'error': '对应的物理压缩包文件不存在'}), 404
 
-    comicinfo_dict = {}
-    try:
-        with zipfile.ZipFile(cbz_path, 'r') as zf:
-            if 'ComicInfo.xml' in zf.namelist():
-                xml_content = zf.read('ComicInfo.xml')
-                root = ET.fromstring(xml_content)
-                for child in root:
-                    # 获取标签名，处理可能有命名空间的情况
-                    tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    if child.text:
-                        comicinfo_dict[tag] = child.text
-            else:
-                return json_response({'error': '压缩包中未找到 ComicInfo.xml'}), 404
-    except Exception as e:
-        return json_response({'error': f'读取文件失败: {str(e)}'}), 500
+    comicinfo_dict = extract_comicinfo_from_cbz(cbz_path)
+    if comicinfo_dict is None:
+        return json_response({'error': '读取文件失败或压缩包中未找到 ComicInfo.xml'}), 404
 
     # 读取cbz的内容后将数据更新到comicinfo字段
     task_db.update_task(task_id, comicinfo=comicinfo_dict)
@@ -1132,3 +1256,180 @@ def read_cbz_metadata(task_id):
         'comicinfo': comicinfo_dict,
         'task': enrich_task_data(updated_task, current_app)
     })
+
+@bp.route('/api/tasks/sync-komga', methods=['POST'])
+def sync_komga_task():
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        data = request.get_json() or {}
+        url = data.get('url')
+        if not url:
+            return json_response({'error': 'No URL provided'}), 400
+
+        from database import task_db
+        from providers import komga
+        from datetime import datetime, timezone
+        from utils import TaskStatus
+
+        kmg = komga.KomgaAPI(
+            server=current_app.config['KOMGA_SERVER'],
+            username=current_app.config['KOMGA_USERNAME'],
+            password=current_app.config['KOMGA_PASSWORD'],
+            logger=global_logger
+        )
+
+        def process_single_komga_book(book_data, provided_url):
+            import time
+            komga_path = book_data.get('url')
+            
+            # 应用路径映射 KOMGA_PATH_MAPPING
+            path_mapping = current_app.config.get('KOMGA_PATH_MAPPING') or {}
+            if isinstance(path_mapping, dict) and komga_path:
+                for k_path, ha_path in path_mapping.items():
+                    if komga_path.startswith(k_path):
+                        komga_path = komga_path.replace(k_path, ha_path, 1)
+                        break
+            
+            book_name = book_data.get('name')
+            komga_series_title = book_data.get('seriesTitle')
+            is_oneshot = book_data.get('oneshot', False)
+            links = book_data.get('metadata', {}).get('links', [])
+
+            matched_task = None
+            source_url = None
+
+            for link in links:
+                l_url = link.get('url')
+                if l_url:
+                    if not source_url:
+                        source_url = l_url
+                    normalized_url, _ = task_db.normalize_url(l_url)
+                    task = task_db.get_task_by_normalized_url(normalized_url)
+                    if task:
+                        matched_task = task
+                        source_url = l_url
+                        break
+            
+            if not source_url:
+                source_url = provided_url
+            
+            if matched_task:
+                task_id = matched_task['id']
+                current_path = matched_task.get('output_path')
+                target_path = matched_task.get('target_path')
+                
+                updates = {}
+                if current_path != komga_path:
+                    updates['output_path'] = komga_path
+                if target_path != komga_path:
+                    updates['target_path'] = komga_path
+                    
+                # 只要触发了重新同步，就主动清除历史错误记录
+                if matched_task.get('last_error'):
+                    updates['last_error'] = None
+                    
+                # 注入 Series
+                if not is_oneshot and komga_series_title:
+                    current_comicinfo = matched_task.get('comicinfo') or {}
+                    if current_comicinfo.get('Series') != komga_series_title:
+                        current_comicinfo['Series'] = komga_series_title
+                        updates['comicinfo'] = current_comicinfo
+                        
+                if updates:
+                    task_db.update_task(task_id, **updates)
+
+                # 检查旧任务是否缺失元数据，如果缺失，就像新任务一样触发一次元数据获取管线
+                # 注意：只要触发了元数据管线，最后写入时也会用数据库的 comicinfo（包含了这里注入的 Series）兜底，所以没冲突
+                needs_metadata = not matched_task.get('gmetadata') or not matched_task.get('comicinfo')
+                if needs_metadata:
+                    import main
+                    executor = main.executor
+                    if executor:
+                        app = current_app._get_current_object()
+                        executor.submit(fetch_and_update_gmetadata_async, app, task_id, source_url)
+
+                return task_id, bool(updates), needs_metadata, matched_task
+            else:
+                import time
+                time.sleep(0.001) # 防止批量生成ID冲突
+                task_id = datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')
+                task_db.add_task(
+                    task_id, 
+                    status=TaskStatus.COMPLETED, 
+                    mode="no-download", 
+                    output_path=komga_path, 
+                    target_path=komga_path,
+                    filename=book_name,
+                    url=source_url
+                )
+                
+                comicinfo_dict = extract_comicinfo_from_cbz(komga_path) or {}
+                
+                # 注入 Series
+                if not is_oneshot and komga_series_title:
+                    comicinfo_dict['Series'] = komga_series_title
+                    
+                if comicinfo_dict:
+                    task_db.update_task(task_id, comicinfo=comicinfo_dict)
+                
+                executor = current_app.config.get('EXECUTOR')
+                if executor:
+                    app = current_app._get_current_object()
+                    executor.submit(fetch_and_update_gmetadata_async, app, task_id, source_url)
+                
+                return task_id, True, True, None
+
+        # 检查是否是系列导入
+        is_series = '/series/' in url.lower()
+        if is_series:
+            from urllib.parse import urlparse
+            parsed_url = urlparse(url)
+            series_id = parsed_url.path.strip('/').split('/')[-1]
+            
+            response = kmg.session.get(f"{kmg.server}/api/v1/series/{series_id}/books?unpaged=true")
+            if response.status_code != 200:
+                return json_response({'error': f'Failed to get series books from Komga: {response.text}'}), 400
+            
+            books_data = response.json().get('content', [])
+            if not books_data:
+                return json_response({'error': 'No books found in this series'}), 404
+            
+            processed = 0
+            task_ids = []
+            for book_data in books_data:
+                task_id, _, _, _ = process_single_komga_book(book_data, url)
+                task_ids.append(str(task_id))
+                processed += 1
+                
+            return json_response({
+                'message': f'成功批量同步了 {processed} 本书籍', 
+                'count': processed, 
+                'task_id': ",".join(task_ids), 
+                'updated': True
+            })
+        else:
+            # 单本书导入 (book or oneshot)
+            response = kmg.get_book(url)
+            if response.status_code != 200:
+                return json_response({'error': f'Failed to get book from Komga: {response.text}'}), 400
+            
+            book_data = response.json()
+            task_id, updated, needs_metadata, matched_task = process_single_komga_book(book_data, url)
+            
+            if matched_task:
+                if updated or needs_metadata:
+                    msg = 'Task paths updated and errors cleared successfully' if updated else 'Task paths are up-to-date'
+                    if needs_metadata:
+                        msg += ', metadata fetch started'
+                    return json_response({'message': msg, 'task_id': task_id, 'updated': True})
+                else:
+                    return json_response({'message': 'Task paths are already up-to-date and metadata exists', 'task_id': task_id, 'updated': False})
+            else:
+                updated_task = task_db.get_task(task_id)
+                return json_response({'message': 'New task created from Komga', 'task_id': task_id, 'task': enrich_task_data(updated_task, current_app)})
+
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"Error syncing Komga task: {e}")
+        return json_response({'error': f'Failed to sync task: {str(e)}'}), 500
+

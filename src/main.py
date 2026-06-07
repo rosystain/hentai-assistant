@@ -377,6 +377,20 @@ def check_config(app_instance=None):
         app_instance.config['KOMGA_USERNAME'] = str(komga_config.get('username', ''))
         app_instance.config['KOMGA_PASSWORD'] = str(komga_config.get('password', ''))
         app_instance.config['KOMGA_LIBRARY_ID'] = str(komga_config.get('library_id', ''))
+        
+        library_dir = str(komga_config.get('library_dir', '')).rstrip('/')
+        mapped_dir = str(komga_config.get('mapped_dir', '')).rstrip('/')
+        app_instance.config['KOMGA_LIBRARY_DIR'] = library_dir
+        app_instance.config['KOMGA_MAPPED_DIR'] = mapped_dir
+        
+        if library_dir and mapped_dir:
+            # 兼容字典格式和单条字符串映射
+            existing_mapping = app_instance.config.get('KOMGA_PATH_MAPPING', {})
+            if isinstance(existing_mapping, dict):
+                existing_mapping[library_dir] = mapped_dir
+            else:
+                existing_mapping = {library_dir: mapped_dir}
+            app_instance.config['KOMGA_PATH_MAPPING'] = existing_mapping
 
         kmg = komga.KomgaAPI(server=app_instance.config['KOMGA_SERVER'], username=app_instance.config['KOMGA_USERNAME'], password=app_instance.config['KOMGA_PASSWORD'],  logger=global_logger)
         try:

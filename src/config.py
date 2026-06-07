@@ -61,7 +61,9 @@ def get_default_config():
             'password': '',
             'library_id': '',
             'index_sync': 'false',
-            'index_sync_interval': '6h'
+            'index_sync_interval': '6h',
+            'library_dir': '',
+            'mapped_dir': ''
         },
         'notification': {},
         'openai': {

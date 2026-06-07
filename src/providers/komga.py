@@ -50,10 +50,11 @@ class KomgaAPI:
         if is_url(text):
             parsed_url = urlparse(text)
             last_segment = parsed_url.path.strip('/').split('/')[-1]
-            if 'book' in text:
+            text_lower = text.lower()
+            if 'book' in text_lower:
                 book_id = last_segment
-            if 'oneshot' in text:
-                # 单行本通过 api/v1/books/list
+            elif 'oneshot' in text_lower:
+                # 单行本通过 api/v1/books/list 查找到具体的 bookId，再返回单本书的 Response 对象
                 series_id = last_segment
                 request_body = {
                     "condition": {
@@ -70,7 +71,16 @@ class KomgaAPI:
                         ]
                     }
                 }
-                return self.session.post(self.server + f'/api/v1/books/list', data=request_body)['content'][0]
+                list_resp = self.session.post(self.server + f'/api/v1/books/list', json=request_body)
+                if list_resp.status_code == 200:
+                    list_data = list_resp.json()
+                    if list_data.get('content'):
+                        book_id = list_data['content'][0]['id']
+                        return self.session.get(self.server + f'/api/v1/books/{book_id}')
+                return list_resp
+            else:
+                # 兜底情况，提取URL最后一段作为ID
+                book_id = last_segment
         else:
             book_id = text
         return self.session.get(self.server + f'/api/v1/books/{book_id}')
