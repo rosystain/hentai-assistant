@@ -265,18 +265,14 @@
                   <label>Title</label>
                   <input type="text" v-model="editForms[task.id].Title" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Title') }" />
                 </div>
-                <div class="edit-field">
-                  <label>Series</label>
-                  <input type="text" v-model="editForms[task.id].Series" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Series') }" />
-                </div>
                 <div class="edit-field-row">
+                  <div class="edit-field">
+                    <label>Series</label>
+                    <input type="text" v-model="editForms[task.id].Series" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Series') }" />
+                  </div>
                   <div class="edit-field">
                     <label>Number</label>
                     <input type="text" v-model="editForms[task.id].Number" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Number') }" />
-                  </div>
-                  <div class="edit-field">
-                    <label>LanguageISO</label>
-                    <input type="text" v-model="editForms[task.id].LanguageISO" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'LanguageISO') }" />
                   </div>
                 </div>
                 <div class="edit-field-row">
@@ -291,13 +287,21 @@
                 </div>
                 <div class="edit-field-row">
                   <div class="edit-field">
-                    <label>Web</label>
-                    <input type="text" v-model="editForms[task.id].Web" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Web') }" placeholder="画廊来源链接" />
+                    <label>Publisher</label>
+                    <input type="text" v-model="editForms[task.id].Publisher" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Publisher') }" />
                   </div>
                   <div class="edit-field">
-                    <label>Tags</label>
-                    <textarea v-model="editForms[task.id].Tags" rows="2" placeholder="逗号分隔" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Tags') }"></textarea>
+                    <label>Translator</label>
+                    <input type="text" v-model="editForms[task.id].Translator" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Translator') }" />
                   </div>
+                </div>
+                <div class="edit-field">
+                  <label>Web</label>
+                  <input type="text" v-model="editForms[task.id].Web" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Web') }" placeholder="画廊来源链接" />
+                </div>
+                <div class="edit-field">
+                  <label>Tags</label>
+                  <textarea v-model="editForms[task.id].Tags" rows="2" placeholder="逗号分隔" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Tags') }"></textarea>
                 </div>
                 <div class="edit-field-row">
                   <div class="edit-field">
@@ -305,8 +309,8 @@
                     <input type="text" v-model="editForms[task.id].Genre" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Genre') }" />
                   </div>
                   <div class="edit-field">
-                    <label>Translator</label>
-                    <input type="text" v-model="editForms[task.id].Translator" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Translator') }" />
+                    <label>LanguageISO</label>
+                    <input type="text" v-model="editForms[task.id].LanguageISO" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'LanguageISO') }" />
                   </div>
                 </div>
                 <div class="edit-field-row">
@@ -317,10 +321,10 @@
                   <div class="edit-field">
                     <label>Manga</label>
                     <select v-model="editForms[task.id].Manga" :class="{ 'diff-highlight': isFieldDifferent(task.id, 'Manga') }">
-                      <option value="">未设置</option>
-                      <option value="YesAndRightToLeft">从右到左</option>
-                      <option value="Yes">从左到右</option>
-                      <option value="No">否</option>
+                      <option value="">未设置 (Not Set)</option>
+                      <option value="YesAndRightToLeft">YesAndRightToLeft</option>
+                      <option value="Yes">Yes</option>
+                      <option value="No">No</option>
                     </select>
                   </div>
                 </div>
@@ -1637,6 +1641,7 @@ const toggleEditPanel = (task: Task) => {
       Tags: metaFinal.Tags || '',
       LanguageISO: metaFinal.LanguageISO || '',
       Genre: metaFinal.Genre || '',
+      Publisher: metaFinal.Publisher || '',
       Translator: metaFinal.Translator || '',
       AgeRating: metaFinal.AgeRating || '',
       Manga: metaFinal.Manga || '',
@@ -1660,6 +1665,7 @@ const toggleEditPanel = (task: Task) => {
       Tags: Array.isArray(metaRaw.tags) ? metaRaw.tags.join(', ') : '',
       LanguageISO: '',
       Genre: metaRaw.category?.toLowerCase() !== 'non-h' ? 'Hentai' : '',
+      Publisher: '',
       Translator: '',
       AgeRating: 'R18+',
       Manga: 'YesAndRightToLeft',
@@ -1672,7 +1678,7 @@ const toggleEditPanel = (task: Task) => {
   } else {
     editForms.value[taskId] = {
       Title: '', Series: '', Number: '', Writer: '', Penciller: '',
-      Tags: '', LanguageISO: '', Genre: '', Translator: '', AgeRating: '', Manga: '',
+      Tags: '', LanguageISO: '', Genre: '', Publisher: '', Translator: '', AgeRating: '', Manga: '',
       AlternateSeries: '', AlternateNumber: '', SeriesGroup: '', Summary: '', Web: ''
     };
   }
@@ -1696,6 +1702,7 @@ const generateFromMetadata = async (taskId: string) => {
         Tags: cbzMeta.Tags || '',
         LanguageISO: cbzMeta.LanguageISO || '',
         Genre: cbzMeta.Genre || '',
+        Publisher: cbzMeta.Publisher || '',
         Translator: cbzMeta.Translator || '',
         AgeRating: cbzMeta.AgeRating || '',
         Manga: cbzMeta.Manga || '',
@@ -1734,6 +1741,7 @@ const readFromCbz = async (taskId: string) => {
         Tags: cbzMeta.Tags || '',
         LanguageISO: cbzMeta.LanguageISO || '',
         Genre: cbzMeta.Genre || '',
+        Publisher: cbzMeta.Publisher || '',
         Translator: cbzMeta.Translator || '',
         AgeRating: cbzMeta.AgeRating || '',
         Manga: cbzMeta.Manga || '',
@@ -1764,7 +1772,7 @@ const readFromCbz = async (taskId: string) => {
 const hasAnyFieldChanged = (taskId: string) => {
   const fieldsToCheck = [
     'Title', 'Series', 'Number', 'LanguageISO', 'Writer', 'Penciller', 
-    'Tags', 'Genre', 'Translator', 'AgeRating', 'Manga', 'AlternateSeries', 
+    'Tags', 'Genre', 'Publisher', 'Translator', 'AgeRating', 'Manga', 'AlternateSeries', 
     'AlternateNumber', 'SeriesGroup', 'Summary', 'Web'
   ];
   return fieldsToCheck.some(field => isFieldDifferent(taskId, field));

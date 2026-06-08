@@ -954,7 +954,8 @@ def update_task_metadata(task_id):
             'gtin': 'GTIN', 'number': 'Number', 'series': 'Series',
             'title': 'Title', 'writer': 'Writer', 'penciller': 'Penciller',
             'translator': 'Translator', 'tags': 'Tags', 'web': 'Web',
-            'manga': 'Manga', 'genre': 'Genre', 'summary': 'Summary'
+            'manga': 'Manga', 'genre': 'Genre', 'summary': 'Summary',
+            'publisher': 'Publisher'
         }
         
         # 允许修改并写入的字段，不再严格依赖 config.yaml，而是开放所有支持的规范字段
@@ -1110,7 +1111,8 @@ def repack_task(task_id):
             'tags': 'Tags',
             'web': 'Web',
             'manga': 'Manga',
-            'genre': 'Genre'
+            'genre': 'Genre',
+            'publisher': 'Publisher'
         }
         allowed_keys = set()
         for k in comicinfo_config.keys():
