@@ -145,6 +145,9 @@
                 <p class="task-id-subtitle">
                   任务ID: {{ task.id }}
                   <span :class="['status-badge-inline', statusClass(task.status)]">{{ statusText(task.status) }}</span>
+                  <a v-if="task.komga_url" :href="task.komga_url" target="_blank" title="在 Komga 中打开" class="komga-icon-link" @click.stop>
+                    <img src="@/assets/komga.svg" alt="Komga" class="komga-icon" />
+                  </a>
                 </p>
                 <div v-if="task.comicinfo && (task.comicinfo.Genre || task.comicinfo.LanguageISO || task.comicinfo.AgeRating || task.comicinfo.Translator)" class="task-capsules">
                   <template v-if="task.comicinfo.Genre">
@@ -175,13 +178,7 @@
                   >
                     跳转画廊
                   </button>
-                  <button
-                    v-if="task.komga_url"
-                    @click="openGallery(task.komga_url)"
-                    class="komga-button"
-                  >
-                    Komga
-                  </button>
+
                   <button @click="toggleLog(task.id)" class="log-button">
                     {{ expandedLogs[task.id] ? '隐藏日志' : '查看日志' }}
                   </button>
@@ -4001,5 +3998,25 @@ h1 {
 
 .dark .confirm-btn:hover:not(:disabled) {
   background-color: #0b5ed7;
+}
+
+.komga-icon-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  opacity: 0.8;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.komga-icon-link:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.komga-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
 }
 </style>

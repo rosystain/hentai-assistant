@@ -1028,6 +1028,29 @@ class TaskDatabase:
                             site_type = excluded.site_type,
                             updated_at = excluded.updated_at
                     ''', data_to_upsert)
+
+                    # 自动关联 tasks 表
+                    conn.executemany('''
+                        UPDATE tasks 
+                        SET komga_id = :book_id 
+                        WHERE komga_id IS NULL AND normalized_url = :normalized_url
+                    ''', [{'book_id': item['book_id'], 'normalized_url': item['normalized_url']} for item in data_to_upsert])
+
+                    # 自动关联 eh_favorites 表
+                    favorites_to_update = []
+                    for item in data_to_upsert:
+                        if item['site_type'] == 'e-hentai':
+                            gid, _ = parse_gallery_url(item['original_url'])
+                            if gid:
+                                favorites_to_update.append({'book_id': item['book_id'], 'gid': gid})
+                    
+                    if favorites_to_update:
+                        conn.executemany('''
+                            UPDATE eh_favorites 
+                            SET komga = :book_id, downloaded = 1 
+                            WHERE gid = :gid AND komga IS NULL
+                        ''', favorites_to_update)
+
                     conn.commit()
                 return True
             except sqlite3.Error as e:
