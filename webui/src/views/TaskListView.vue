@@ -2110,7 +2110,7 @@ h1 {
   margin: 4px 0 4px 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .task-filename-subtitle {
@@ -3377,6 +3377,11 @@ h1 {
   color: var(--text-color-light);
 }
 
+.dark .edit-field select option {
+  background-color: #2125290a;
+  color: var(--text-color-light);
+}
+
 .dark .edit-field input:focus,
 .dark .edit-field textarea:focus,
 .dark .edit-field select:focus {
@@ -4012,7 +4017,6 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-left: 4px;
   opacity: 0.8;
   transition: opacity 0.2s, transform 0.2s;
 }
