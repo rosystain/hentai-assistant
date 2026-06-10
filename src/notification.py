@@ -227,13 +227,24 @@ def listen_event(komga_server: str, komga_username: str, komga_password: str, no
                     listener_logger.debug(f"正在为事件 '{komga_events[event_type]}' 分发通知, 数据: {book_data}")
                     notify(event=komga_events[event_type], data=book_data, logger=listener_logger, notification_config=notification_config)
 
-                    # 如果 fav_sync 启用，则发送内部通知
                     config_data = load_config()
+                    port = config_data.get('general', {}).get('port', 5001)
+
+                    # 发送内部任务同步通知 (独立于收藏夹同步，始终执行)
+                    if event_type == 'ThumbnailBookAdded' and 'url' in book_data:
+                        sync_url = f"http://localhost:{port}/api/tasks/sync-komga"
+                        sync_payload = {'url': book_data['url']}
+                        try:
+                            requests.post(sync_url, json=sync_payload, timeout=10)
+                            listener_logger.info(f"成功触发任务同步: {sync_url}")
+                        except requests.exceptions.RequestException as e:
+                            listener_logger.error(f"触发任务同步失败: {e}")
+
+                    # 如果 fav_sync 启用，则发送内部通知
                     ehentai_config = config_data.get('ehentai', {})
                     fav_sync_enabled = ehentai_config.get('favorite_sync', False)
                     
                     if fav_sync_enabled and event_type in ['ThumbnailBookAdded', 'BookDeleted']:
-                        port = config_data.get('general', {}).get('port', 5001)
                         internal_url = f"http://localhost:{port}/api/internal/favorite"
                         
                         # 构建与 main.py 中 API 匹配的 payload
