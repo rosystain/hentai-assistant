@@ -344,35 +344,48 @@ def get_task(task_id):
         if not tasks_lock:
             return json_response({'error': 'Server not properly initialized'}), 500
 
-        # 首先检查内存中的任务
+        # 先从数据库获取任务（作为基准数据源，包含异步更新的 metadata/comicinfo 等）
+        db_task = task_db.get_task(task_id)
+        
         with tasks_lock:
             memory_task = tasks.get(task_id)
+            
+        if db_task:
             if memory_task:
-                # 把内存中任务的所有熟悉转换为字典，避免遗漏 output_path 等新字段
-                task_data = {
-                    'id': task_id,
+                # 合并内存中的动态执行信息
+                db_task.update({
                     'status': memory_task.status,
                     'error': memory_task.error,
+                    'log': memory_task.log_buffer.getvalue(),
                     'filename': memory_task.filename,
                     'progress': memory_task.progress,
                     'downloaded': memory_task.downloaded,
                     'total_size': memory_task.total_size,
-                    'speed': memory_task.speed,
-                    'url': getattr(memory_task, 'url', None),
-                    'mode': getattr(memory_task, 'mode', None),
-                    'metadata': getattr(memory_task, 'metadata', None),
-                    'comicinfo': getattr(memory_task, 'comicinfo', None),
-                    'output_path': getattr(memory_task, 'output_path', None),
-                    'target_path': getattr(memory_task, 'target_path', None),
-                    'cover_url': getattr(memory_task, 'cover_url', None),
-                    'log': memory_task.log_buffer.getvalue()
-                }
-                return json_response(enrich_task_data(task_data, current_app))
-
-        # 如果内存中没有，检查数据库
-        db_task = task_db.get_task(task_id)
-        if db_task:
+                    'speed': memory_task.speed
+                })
             return json_response(enrich_task_data(db_task, current_app))
+
+        # 如果数据库没有，但内存中有（极端罕见情况）
+        if memory_task:
+            task_data = {
+                'id': task_id,
+                'status': memory_task.status,
+                'error': memory_task.error,
+                'filename': memory_task.filename,
+                'progress': memory_task.progress,
+                'downloaded': memory_task.downloaded,
+                'total_size': memory_task.total_size,
+                'speed': memory_task.speed,
+                'url': getattr(memory_task, 'url', None),
+                'mode': getattr(memory_task, 'mode', None),
+                'metadata': getattr(memory_task, 'metadata', None),
+                'comicinfo': getattr(memory_task, 'comicinfo', None),
+                'output_path': getattr(memory_task, 'output_path', None),
+                'target_path': getattr(memory_task, 'target_path', None),
+                'cover_url': getattr(memory_task, 'cover_url', None),
+                'log': memory_task.log_buffer.getvalue()
+            }
+            return json_response(enrich_task_data(task_data, current_app))
 
         return json_response({'error': 'Task not found'}), 404
 
